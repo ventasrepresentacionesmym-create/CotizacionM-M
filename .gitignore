@@ -1,0 +1,19 @@
+node_modules/
+.dist/
+.DS_Store
+Thumbs.db
+.env*
+.env.local
+.env.development
+.env.production
+.env.test
+# Supabase/CI artefacts
+.supabase/
+# Build artefacts
+build/
+# Runtime state files
+estado_app.json
+cyp.json
+datos.json
+Editable/
+PDF/
