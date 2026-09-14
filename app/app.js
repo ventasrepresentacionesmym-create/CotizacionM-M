@@ -21,7 +21,8 @@ let STATE = {
   datos: [],
   cyp: { clientes: [], asesores: [] },
   cotizaciones: [],
-  seq: {}
+  seq: {},
+  lastUpdate: null
 };
 
 let DRAFT = null;
@@ -89,6 +90,24 @@ function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function formatFechaHora(isoStr) {
+  if (!isoStr) return "Sin registros previos";
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return "Sin registros previos";
+    return d.toLocaleString("es-CO", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
+  } catch (e) {
+    return "Sin registros previos";
+  }
 }
 
 /* ============================================================
@@ -177,12 +196,15 @@ const AppInit = {
     }
 
     try {
+      // 1. Asesores
       const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
       STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
 
+      // 2. Clientes
       const { data: dbClientes } = await sb.from("clientes").select("nombre, ciudad, nit").order("nombre");
       STATE.cyp.clientes = (dbClientes && Array.isArray(dbClientes)) ? dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit })) : [];
 
+      // 3. Cotizaciones
       const { data: dbCotizaciones } = await sb.from("cotizaciones").select("*").order("created_at", { ascending: false });
       STATE.cotizaciones = (dbCotizaciones && Array.isArray(dbCotizaciones)) ? dbCotizaciones.map(c => ({
         numero: c.numero,
@@ -202,20 +224,27 @@ const AppInit = {
         items: c.items || []
       })) : [];
 
+      // 4. Productos
       let allProducts = [];
       let from = 0;
       const step = 1000;
       let hasMore = true;
+      let latestUpdated = null;
+
       while (hasMore) {
-        const { data: dbProd, error } = await sb.from("productos").select("codigo, descripcion, iva_pct, existencia, costo, proveedor").range(from, from + step - 1);
+        const { data: dbProd, error } = await sb.from("productos").select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at").range(from, from + step - 1);
         if (error || !dbProd || !dbProd.length) {
           hasMore = false;
         } else {
           allProducts.push(...dbProd);
+          if (!latestUpdated && dbProd[0] && dbProd[0].updated_at) {
+            latestUpdated = dbProd[0].updated_at;
+          }
           if (dbProd.length < step) hasMore = false;
           else from += step;
         }
       }
+
       STATE.datos = allProducts.map(p => [
         p.codigo,
         p.descripcion,
@@ -224,6 +253,12 @@ const AppInit = {
         Number(p.costo) || 0,
         p.proveedor || ""
       ]);
+
+      if (latestUpdated) {
+        STATE.lastUpdate = latestUpdated;
+      } else if (allProducts.length === 0) {
+        STATE.lastUpdate = null;
+      }
 
       persistStateLocal();
       console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
@@ -244,219 +279,75 @@ if (document.readyState === "loading") {
    ============================================================ */
 const Views = {};
 
-/* ---------- ACTUALIZAR BASE DE DATOS ---------- */
+/* ---------- 📊 ACTUALIZAR DATOS (RESUMEN EXCLUSIVO) ---------- */
 Views.renderActualizarExcel = function () {
   const el = document.getElementById("view-actualizar-excel");
+  const totalProd = (STATE.datos || []).length;
+  const totalClie = ((STATE.cyp && STATE.cyp.clientes) || []).length;
+  const fechaStr = formatFechaHora(STATE.lastUpdate);
+
   el.innerHTML = `
     <div class="section-head">
-      <h2>Actualizar Base de Datos de Productos y Clientes</h2>
+      <h2>Estado de la Base de Datos</h2>
       <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
 
     <div class="card">
-      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:6px">
-        1. Sincronización Automática con un Clic
+      <div style="font-size:14.5px;font-weight:700;color:var(--azul-950);margin-bottom:4px">
+        Resumen de Datos Disponibles
       </div>
-      <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
-        Descarga <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en tu carpeta del computador y haz doble clic en el archivo <b>actualizar.bat</b>. ¡Eso sincroniza Supabase automáticamente!
+      <div style="font-size:13px;color:var(--texto-suave);line-height:1.45;margin-bottom:16px">
+        Información actual sincronizada en la nube (Supabase):
       </div>
-      <button class="btn btn-accent" id="btnReloadSupabase">🔄 Recargar datos desde la Nube (Supabase)</button>
-    </div>
 
-    <div class="card">
-      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:6px">
-        2. Subir Archivo Consolidado (Datos.html / Datos.json / Datos.xlsx)
+      <div class="data-summary-box">
+        <div class="data-metric">
+          <div class="data-metric-val" id="metricProd">${totalProd.toLocaleString("es-CO")}</div>
+          <div class="data-metric-lbl">📦 Productos</div>
+        </div>
+        <div class="data-metric">
+          <div class="data-metric-val" id="metricClie">${totalClie.toLocaleString("es-CO")}</div>
+          <div class="data-metric-lbl">👥 Clientes</div>
+        </div>
+        <div class="data-metric" style="grid-column: span 1;">
+          <div class="data-metric-val" id="metricFecha" style="font-size:14.5px;font-weight:700;margin-top:4px;color:var(--teal-700)">${fechaStr}</div>
+          <div class="data-metric-lbl" style="margin-top:4px">🕒 Última Actualización</div>
+        </div>
       </div>
-      <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
-        Selecciona el archivo <b>Datos.html</b> generado por el actualizador o tu <b>Datos.xlsx</b> para cargar y sincronizar los productos y clientes de inmediato:
-      </div>
-      <input type="file" id="fileUniversal" accept=".html,.htm,.json,.xlsx,.xls" style="margin-bottom:12px">
-      <button class="btn btn-primary" id="btnUploadUniversal">Subir y Sincronizar con Supabase</button>
-    </div>
 
-    <div class="card" id="excelStatusCard" style="display:none">
-      <div style="font-size:14px;font-weight:700;color:var(--azul-950);margin-bottom:8px">Progreso de la Sincronización</div>
-      <div id="excelProgressBar" style="background:#e2e8f0;border-radius:6px;height:10px;overflow:hidden;margin-bottom:10px">
-        <div id="excelProgressFill" style="background:var(--teal-600);height:100%;width:0%;transition:width .2s"></div>
+      <div style="margin-top:20px;padding:14px 16px;background:#f8fafc;border-radius:8px;border:1px solid var(--linea);font-size:13px;color:var(--texto);line-height:1.5">
+        ℹ️ <b>¿Cómo actualizar la base de datos?</b><br>
+        Descarga los archivos <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en la carpeta <code>Cotizacion nueva</code> de tu computador y haz doble clic en el archivo <b><code>actualizar.bat</code></b>.
       </div>
-      <div id="excelStatusLog" style="font-size:13px;color:var(--texto);white-space:pre-line;line-height:1.6"></div>
+
+      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-accent" id="btnReloadSupabase">🔄 Recargar datos desde Supabase</button>
+      </div>
     </div>
   `;
 
-  const logStatus = (msg, pct) => {
-    const card = document.getElementById("excelStatusCard");
-    const log = document.getElementById("excelStatusLog");
-    const fill = document.getElementById("excelProgressFill");
-    if (card) card.style.display = "block";
-    if (log) log.textContent = msg;
-    if (fill && pct != null) fill.style.width = pct + "%";
-  };
-
-  const readFile = (file, asBinary) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result);
-    reader.onerror = e => reject(e);
-    if (asBinary) reader.readAsArrayBuffer(file);
-    else reader.readAsText(file, "utf-8");
-  });
-
-  // Botón recargar desde Supabase
   document.getElementById("btnReloadSupabase").addEventListener("click", async () => {
     const btn = document.getElementById("btnReloadSupabase");
     btn.disabled = true;
     btn.textContent = "Recargando...";
     try {
       await AppInit.boot();
-      toast(`Datos actualizados desde la nube: ${STATE.datos.length} productos y ${STATE.cyp.clientes.length} clientes.`);
+      const pCount = (STATE.datos || []).length;
+      const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
+      document.getElementById("metricProd").textContent = pCount.toLocaleString("es-CO");
+      document.getElementById("metricClie").textContent = cCount.toLocaleString("es-CO");
+      document.getElementById("metricFecha").textContent = formatFechaHora(STATE.lastUpdate);
+      toast(`Datos recargados: ${pCount} productos y ${cCount} clientes.`);
     } catch (e) {
       toast("Error al conectar con la nube: " + e.message, true);
     } finally {
       btn.disabled = false;
-      btn.textContent = "🔄 Recargar datos desde la Nube (Supabase)";
-    }
-  });
-
-  // Botón procesar archivo universal (HTML, JSON o XLSX)
-  document.getElementById("btnUploadUniversal").addEventListener("click", async () => {
-    const fileInput = document.getElementById("fileUniversal");
-    if (!fileInput.files || !fileInput.files[0]) return toast("Selecciona el archivo primero", true);
-
-    const file = fileInput.files[0];
-    const fileName = file.name.toLowerCase();
-    const btn = document.getElementById("btnUploadUniversal");
-    btn.disabled = true;
-
-    try {
-      let productos = [];
-      let clientes = [];
-
-      logStatus(`Leyendo archivo ${file.name}...`, 20);
-
-      if (fileName.endsWith(".json")) {
-        const text = await readFile(file, false);
-        const data = JSON.parse(text);
-        productos = data.productos || [];
-        clientes = data.clientes || [];
-      } else if (fileName.endsWith(".html") || fileName.endsWith(".htm")) {
-        const html = await readFile(file, false);
-        const rows = parseHtmlRows(html);
-        for (const r of rows) {
-          if (r.length < 5) continue;
-          const cod = r[0] != null ? String(r[0]).trim() : "";
-          const desc = r[1] != null ? String(r[1]).trim() : "";
-          if (cod || desc) {
-            productos.push({
-              codigo: cod,
-              descripcion: desc,
-              iva_pct: Number(r[2]) || 0,
-              existencia: Number(r[3]) || 0,
-              costo: Number(r[4]) || 0,
-              proveedor: r[5] || ""
-            });
-          }
-          const clNom = r[6] != null ? String(r[6]).trim() : "";
-          if (clNom) {
-            clientes.push({
-              nombre: clNom,
-              ciudad: r[7] != null ? String(r[7]).trim() : "",
-              nit: r[8] != null ? String(r[8]).trim() : ""
-            });
-          }
-        }
-      } else {
-        // XLSX o XLS
-        const buf = await readFile(file, true);
-        const wb = XLSX.read(buf, { type: "array" });
-        const wsName = wb.SheetNames[0];
-        const ws = wb.Sheets[wsName];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-        for (let i = 2; i < rows.length; i++) {
-          const r = rows[i];
-          const cod = r[0] != null ? String(r[0]).trim() : "";
-          const desc = r[1] != null ? String(r[1]).trim() : "";
-          if (cod || desc) {
-            productos.push({
-              codigo: cod,
-              descripcion: desc,
-              iva_pct: Number(r[2]) || 0,
-              existencia: Number(r[3]) || 0,
-              costo: Number(r[4]) || 0,
-              proveedor: r[8] || ""
-            });
-          }
-          const clNom = r[5] != null ? String(r[5]).trim() : "";
-          if (clNom) {
-            clientes.push({
-              nombre: clNom,
-              ciudad: r[6] != null ? String(r[6]).trim() : "",
-              nit: r[7] != null ? String(r[7]).trim() : ""
-            });
-          }
-        }
-      }
-
-      if (!productos.length && !clientes.length) {
-        throw new Error("No se encontraron productos ni clientes en el archivo seleccionado.");
-      }
-
-      logStatus(`Encontrados ${productos.length} productos y ${clientes.length} clientes. Sincronizando con Supabase...`, 50);
-      await syncWithSupabase(productos, clientes, logStatus);
-
-      logStatus(`✅ ¡Sincronización completada con éxito!\n- Productos en Supabase: ${productos.length}\n- Clientes en Supabase: ${clientes.length}`, 100);
-      toast("Base de datos actualizada con éxito");
-    } catch (e) {
-      console.error(e);
-      logStatus("❌ Error: " + e.message, 0);
-      toast("Error al sincronizar: " + e.message, true);
-    } finally {
-      btn.disabled = false;
+      btn.textContent = "🔄 Recargar datos desde Supabase";
     }
   });
 };
 
-function parseHtmlRows(html) {
-  const trBlocks = html.split(/<tr[^>]*>/i);
-  const result = [];
-  for (let b = 1; b < trBlocks.length; b++) {
-    const block = trBlocks[b];
-    const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<td|$)/gi)];
-    if (!tdMatches.length) continue;
-    result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
-  }
-  return result;
-}
-
-async function syncWithSupabase(productos, clientes, progressFn) {
-  const sb = getSb();
-  if (!sb) throw new Error("Supabase no está disponible.");
-
-  progressFn("Limpiando productos anteriores en Supabase...", 50);
-  await sb.from("productos").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-
-  const chunk = 500;
-  for (let i = 0; i < productos.length; i += chunk) {
-    const slice = productos.slice(i, i + chunk);
-    const { error } = await sb.from("productos").insert(slice);
-    if (error) console.warn("Error subiendo bloque de productos:", error);
-    const pct = Math.min(85, Math.round(50 + (i / productos.length) * 30));
-    progressFn(`Subiendo productos a Supabase: ${Math.min(i + chunk, productos.length)} de ${productos.length}...`, pct);
-  }
-
-  progressFn("Actualizando clientes en Supabase...", 85);
-  await sb.from("clientes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-
-  for (let i = 0; i < clientes.length; i += chunk) {
-    const slice = clientes.slice(i, i + chunk);
-    const { error } = await sb.from("clientes").insert(slice);
-    if (error) console.warn("Error subiendo bloque de clientes:", error);
-  }
-
-  STATE.datos = productos.map(p => [p.codigo, p.descripcion, p.iva_pct, p.existencia, p.costo, p.proveedor]);
-  STATE.cyp.clientes = clientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
-  persistStateLocal();
-}
-
-/* ---------- ASESORES ---------- */
+/* ---------- 👤 ASESORES ---------- */
 Views.renderAsesores = function () {
   const el = document.getElementById("view-asesores");
   el.innerHTML = `
@@ -465,7 +356,6 @@ Views.renderAsesores = function () {
       <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
     <div class="card">
-      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:12px">Administrar asesores</div>
       <div class="search-bar">
         <input id="asesorNombre" placeholder="Nombre del nuevo asesor..." maxlength="80" autocomplete="off">
         <button class="btn btn-accent" id="addAsesorBtn">+ Agregar</button>
@@ -639,36 +529,124 @@ Views.renderAsesores = function () {
   paintAsesores();
 };
 
-/* ---------- COTIZACIONES GUARDADAS ---------- */
+/* ---------- 📁 COTIZACIONES GUARDADAS (BÚSQUEDA Y FILTRO INTERACTIVO) ---------- */
 Views.renderGuardadas = function () {
   const el = document.getElementById("view-guardadas");
-  const cot = DB.getCotizaciones().slice().sort((a, b) => b.numero.localeCompare(a.numero, undefined, { numeric: true }));
+
   el.innerHTML = `
-    <div class="section-head"><h2>Cotizaciones guardadas</h2><span class="back" onclick="Router.go('home')">← Volver</span></div>
+    <div class="section-head">
+      <h2>Cotizaciones guardadas</h2>
+      <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
+    </div>
     <div class="card">
-      <div class="search-bar"><input id="cotSearch" placeholder="Buscar por número o cliente…"></div>
-      <div class="list-row head"><span>N.°</span><span>Cliente</span><span>Fecha</span><span>Asesor</span><span>Total</span></div>
+      <div class="search-bar">
+        <input id="cotSearch" placeholder="Buscar por N.°, cliente o asesor..." autocomplete="off">
+      </div>
+      <div class="list-row head" id="cotHeaderRow">
+        <span data-sort="numero">N.° <b class="sort-ic"></b></span>
+        <span data-sort="cliente">Cliente <b class="sort-ic"></b></span>
+        <span data-sort="fecha">Fecha <b class="sort-ic"></b></span>
+        <span data-sort="asesor">Asesor <b class="sort-ic"></b></span>
+        <span data-sort="total" style="text-align:right">Total <b class="sort-ic"></b></span>
+      </div>
       <div id="cotList"></div>
     </div>
   `;
-  const list = document.getElementById("cotList");
-  function paint(q) {
-    q = (q || "").toLowerCase();
-    const rows = cot.filter(c => !q || c.numero.toLowerCase().includes(q) || (c.cliente || "").toLowerCase().includes(q));
-    list.innerHTML = rows.length ? rows.map(c => `
+
+  let sortCol = "numero";
+  let sortAsc = false;
+  let currentSearch = "";
+
+  function paint() {
+    const list = document.getElementById("cotList");
+    if (!list) return;
+
+    let cots = DB.getCotizaciones().slice();
+    const q = currentSearch.trim().toLowerCase();
+
+    // Filtro por N.°, Cliente o Asesor
+    if (q) {
+      cots = cots.filter(c =>
+        (c.numero || "").toLowerCase().includes(q) ||
+        (c.cliente || "").toLowerCase().includes(q) ||
+        (c.asesor || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Ordenamiento por columna
+    cots.sort((a, b) => {
+      let res = 0;
+      if (sortCol === "numero") {
+        res = String(a.numero || "").localeCompare(String(b.numero || ""), undefined, { numeric: true });
+      } else if (sortCol === "cliente") {
+        res = String(a.cliente || "").localeCompare(String(b.cliente || ""));
+      } else if (sortCol === "fecha") {
+        res = String(a.fecha || "").localeCompare(String(b.fecha || ""));
+      } else if (sortCol === "asesor") {
+        res = String(a.asesor || "").localeCompare(String(b.asesor || ""));
+      } else if (sortCol === "total") {
+        res = (Number(a.total) || 0) - (Number(b.total) || 0);
+      }
+      return sortAsc ? res : -res;
+    });
+
+    // Actualizar iconos de cabecera
+    document.querySelectorAll("#cotHeaderRow span[data-sort]").forEach(sp => {
+      const col = sp.dataset.sort;
+      const ic = sp.querySelector(".sort-ic");
+      if (col === sortCol) {
+        sp.classList.add("sorted");
+        if (ic) ic.textContent = sortAsc ? " ▲" : " ▼";
+      } else {
+        sp.classList.remove("sorted");
+        if (ic) ic.textContent = "";
+      }
+    });
+
+    if (!cots.length) {
+      list.innerHTML = `<div class="empty"><div class="ic">🔍</div>Sin resultados</div>`;
+      return;
+    }
+
+    list.innerHTML = cots.map(c => `
       <div class="list-row" data-numero="${esc(c.numero)}">
-        <span class="n">${esc(c.numero)}</span><span>${esc(c.cliente || "—")}</span><span>${esc(c.fecha)}</span><span>${esc(c.asesor || "—")}</span><span>${fmtCOP(c.total)}</span>
-      </div>`).join("") : `<div class="empty"><div class="ic">🔍</div>Sin resultados</div>`;
+        <span class="n">${esc(c.numero)}</span>
+        <span>${esc(c.cliente || "—")}</span>
+        <span>${esc(c.fecha || "")}</span>
+        <span>${esc(c.asesor || "—")}</span>
+        <span style="font-family:var(--mono);font-weight:700;color:var(--azul-950);text-align:right">${fmtCOP(c.total)}</span>
+      </div>
+    `).join("");
+
     list.querySelectorAll(".list-row[data-numero]").forEach(row => {
       row.addEventListener("click", () => Router.go("nueva", { record: row.dataset.numero }));
     });
   }
-  paint("");
-  document.getElementById("cotSearch").addEventListener("input", e => paint(e.target.value));
-  if (!cot.length) list.innerHTML = `<div class="empty"><div class="ic">🗂️</div>Aún no hay cotizaciones guardadas.</div>`;
+
+  // Eventos de ordenamiento en cabeceras
+  document.querySelectorAll("#cotHeaderRow span[data-sort]").forEach(sp => {
+    sp.addEventListener("click", () => {
+      const col = sp.dataset.sort;
+      if (sortCol === col) {
+        sortAsc = !sortAsc;
+      } else {
+        sortCol = col;
+        sortAsc = true;
+      }
+      paint();
+    });
+  });
+
+  const searchInput = document.getElementById("cotSearch");
+  searchInput.addEventListener("input", e => {
+    currentSearch = e.target.value;
+    paint();
+  });
+
+  paint();
 };
 
-/* ---------- NUEVA / EDITAR COTIZACIÓN ---------- */
+/* ---------- 📝 NUEVA / EDITAR COTIZACIÓN ---------- */
 Views.renderNueva = function (numeroToLoad) {
   const el = document.getElementById("view-nueva");
   const existing = numeroToLoad ? DB.getCotizaciones().find(c => c.numero === numeroToLoad) : null;
@@ -679,9 +657,14 @@ Views.renderNueva = function (numeroToLoad) {
 
   Cotizador._editingNumero = isEdit ? existing.numero : null;
 
+  const defaultObs =
+    "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
+    "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
+    "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
+
   el.innerHTML = `
     <div class="section-head">
-      <h2>${isEdit ? `Cotización ${esc(existing.numero)} <span style="font-size:12.5px;font-weight:700;color:var(--teal-700);background:#e6f6f8;padding:3px 10px;border-radius:12px;margin-left:8px;vertical-align:middle">Editando</span>` : "Nueva cotización"}</h2>
+      <h2>${isEdit ? `Cotización ${esc(existing.numero)} <span style="font-size:12px;font-weight:700;color:var(--teal-700);background:#e6f6f8;padding:3px 10px;border-radius:12px;margin-left:8px;vertical-align:middle">Editando</span>` : "Nueva cotización"}</h2>
       <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
 
@@ -704,12 +687,38 @@ Views.renderNueva = function (numeroToLoad) {
       <div class="grid g3" style="margin-top:14px">
         <div><label>NIT</label><input id="f_nit" value="${esc(source ? source.nit || "" : "")}" placeholder="Automático o escribir"></div>
         <div><label>Ciudad</label><input id="f_ciudad" value="${esc(source ? source.ciudad || "" : "")}" placeholder="Automático o escribir"></div>
-        <div><label>Contacto *</label><input id="f_contacto" value="${esc(source ? source.contacto || "" : "")}" placeholder="Persona de contacto"></div>
+        <div><label>Contacto</label><input id="f_contacto" value="${esc(source ? source.contacto || "" : "")}" placeholder="Persona de contacto"></div>
       </div>
       <div class="grid g3" style="margin-top:14px">
-        <div><label>Tiempo de entrega *</label><input id="f_tiempo" list="opciones_tiempo" value="${esc(source ? source.tiempoEntrega || "Inmediata" : "Inmediata")}" placeholder="Selecciona o escribe"><datalist id="opciones_tiempo"><option value="Inmediata"><option value="De 3 a 5 días hábiles"><option value="De 8 a 15 días hábiles"></datalist></div>
-        <div><label>Forma de pago *</label><input id="f_pago" list="opciones_pago" value="${esc(source ? source.formaPago || "Contado" : "Contado")}" placeholder="Selecciona o escribe"><datalist id="opciones_pago"><option value="Contado"><option value="Crédito 30 días"><option value="Crédito 60 días"></datalist></div>
-        <div><label>Validez de la oferta *</label><input id="f_validez" value="${esc(source ? source.validez || "15 días" : "15 días")}"></div>
+        <div>
+          <label>Tiempo de entrega</label>
+          <div class="combo-wrapper">
+            <input id="f_tiempo" list="opciones_tiempo" value="${esc(source ? source.tiempoEntrega || "Inmediata" : "Inmediata")}" placeholder="Selecciona o escribe..." autocomplete="off">
+            <div class="combo-arrow" onclick="document.getElementById('f_tiempo').focus();">▼</div>
+            <datalist id="opciones_tiempo">
+              <option value="Inmediata">
+              <option value="De 3 a 5 días hábiles">
+              <option value="De 8 a 15 días hábiles">
+              <option value="De 15 a 20 días hábiles">
+              <option value="De 20 a 30 días hábiles">
+            </datalist>
+          </div>
+        </div>
+        <div>
+          <label>Forma de pago</label>
+          <div class="combo-wrapper">
+            <input id="f_pago" list="opciones_pago" value="${esc(source ? source.formaPago || "Contado" : "Contado")}" placeholder="Selecciona o escribe..." autocomplete="off">
+            <div class="combo-arrow" onclick="document.getElementById('f_pago').focus();">▼</div>
+            <datalist id="opciones_pago">
+              <option value="Contado">
+              <option value="Crédito 15 días">
+              <option value="Crédito 30 días">
+              <option value="Crédito 60 días">
+              <option value="50% Anticipo, 50% Contraentrega">
+            </datalist>
+          </div>
+        </div>
+        <div><label>Validez de la oferta</label><input id="f_validez" value="${esc(source ? source.validez || "15 días" : "15 días")}"></div>
       </div>
     </div>
 
@@ -743,7 +752,7 @@ Views.renderNueva = function (numeroToLoad) {
 
     <div class="card">
       <label>Observaciones</label>
-      <textarea id="f_obs">${esc(source ? source.observaciones || "" : "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\nNo somos grandes contribuyentes ni autorretenedores de renta.\nSomos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021.\nFavor no practicar ReteICA en otros municipios.")}</textarea>
+      <textarea id="f_obs">${esc(source ? source.observaciones || defaultObs : defaultObs)}</textarea>
     </div>
 
     <div class="btn-row">
@@ -928,28 +937,69 @@ const Cotizador = {
     };
   },
 
-  validate(data) {
-    const required = { cliente: "Cliente", contacto: "Contacto", tiempoEntrega: "Tiempo de entrega", formaPago: "Forma de pago", validez: "Validez de la oferta", asesor: "Asesor" };
-    const missing = [];
+  validate(data, withPdf) {
     document.querySelectorAll("#view-nueva .err").forEach(e => e.classList.remove("err"));
-    const map = { cliente: "f_cliente", contacto: "f_contacto", tiempoEntrega: "f_tiempo", formaPago: "f_pago", validez: "f_validez", asesor: "f_asesor" };
-    for (const key in required) {
-      if (!data[key]) {
-        missing.push(required[key]);
-        const el = document.getElementById(map[key]);
+
+    if (!withPdf) {
+      // Para guardar borrador/cotización: SOLO Cliente y Asesor son obligatorios
+      const missing = [];
+      if (!data.cliente) {
+        missing.push("Cliente");
+        const el = document.getElementById("f_cliente");
         if (el) el.classList.add("err");
       }
+      if (!data.asesor) {
+        missing.push("Asesor");
+        const el = document.getElementById("f_asesor");
+        if (el) el.classList.add("err");
+      }
+      return missing;
+    } else {
+      // Para generar PDF: TODOS los campos son obligatorios
+      const required = {
+        cliente: "Cliente",
+        contacto: "Contacto",
+        tiempoEntrega: "Tiempo de entrega",
+        formaPago: "Forma de pago",
+        validez: "Validez de la oferta",
+        asesor: "Asesor"
+      };
+      const map = {
+        cliente: "f_cliente",
+        contacto: "f_contacto",
+        tiempoEntrega: "f_tiempo",
+        formaPago: "f_pago",
+        validez: "f_validez",
+        asesor: "f_asesor"
+      };
+      const missing = [];
+      for (const key in required) {
+        if (!data[key]) {
+          missing.push(required[key]);
+          const el = document.getElementById(map[key]);
+          if (el) el.classList.add("err");
+        }
+      }
+      return missing;
     }
-    return missing;
   },
 
   async save(withPdf) {
     const data = this.collect();
-    const missing = this.validate(data);
-    if (missing.length) return toast("Falta completar: " + missing.join(", "), true);
+    const missing = this.validate(data, withPdf);
+
+    if (missing.length) {
+      if (withPdf) {
+        return toast("Para generar el PDF debes completar: " + missing.join(", "), true);
+      } else {
+        return toast("Falta completar: " + missing.join(", "), true);
+      }
+    }
 
     const items = ItemsUI.items.filter(it => (it.codigo && String(it.codigo).trim()) || (it.descripcion && String(it.descripcion).trim()));
-    if (!items.length) return toast("Debes agregar al menos un producto", true);
+    if (withPdf && !items.length) {
+      return toast("Para generar el PDF debes agregar al menos un producto a la cotización", true);
+    }
 
     let subtotal = 0, iva = 0;
     items.forEach(it => {
@@ -1062,7 +1112,7 @@ const Cotizador = {
 };
 
 /* ============================================================
-   GENERADOR DE PDF (jsPDF) — formato oficial
+   GENERADOR DE PDF (jsPDF) — diseño profesional y limpio
    ============================================================ */
 const PdfBuilder = {
   build(r) {
@@ -1093,7 +1143,7 @@ const PdfBuilder = {
 
     let y = 28;
 
-    // 1. ENCABEZADO
+    // 1. ENCABEZADO: Logo + Información de la empresa
     const logoW = 120, logoH = 48;
     try {
       if (typeof LOGO_B64 !== "undefined") {
@@ -1150,36 +1200,23 @@ const PdfBuilder = {
 
     y += 66;
 
+    // Línea divisoria azul
     doc.setDrawColor(...navy);
-    doc.setLineWidth(2.2);
+    doc.setLineWidth(2);
     doc.line(M, y, pageW - M, y);
-    y += 8;
+    y += 12;
 
-    // 2. TAGLINE
-    doc.setFillColor(...bgBadge);
-    doc.roundedRect(M, y, contentW, 18, 3, 3, "F");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
-    doc.setTextColor(...navy);
-    doc.text(
-      "EQUIPOS MÉDICOS · INSTRUMENTAL QUIRÚRGICO · INSUMOS HOSPITALARIOS · PAPELES TÉRMICOS",
-      pageW / 2,
-      y + 12,
-      { align: "center" }
-    );
-    y += 26;
-
-    // 3. CLIENTE
+    // 2. PANEL DE INFORMACIÓN DEL CLIENTE (Anchos optimizados para evitar textos cortados)
     const clientCells = [
-      { label: "CLIENTE", value: r.cliente || "—", w: contentW * 0.38 },
-      { label: "NIT", value: r.nit || "—", w: contentW * 0.20 },
-      { label: "CIUDAD", value: r.ciudad || "—", w: contentW * 0.20 },
+      { label: "CLIENTE", value: r.cliente || "—", w: contentW * 0.34 },
+      { label: "NIT", value: r.nit || "—", w: contentW * 0.18 },
+      { label: "CIUDAD", value: r.ciudad || "—", w: contentW * 0.26 },
       { label: "CONTACTO", value: r.contacto || "—", w: contentW * 0.22 }
     ];
     y = this.renderPanel(doc, clientCells, M, y, contentW, bgPanel, border, labelKey, textDark);
     y += 8;
 
-    // 4. CONDICIONES COMERCIALES
+    // 3. CONDICIONES COMERCIALES
     const termsCells = [
       { label: "TIEMPO DE ENTREGA", value: r.tiempoEntrega || "Inmediata", w: contentW * 0.34 },
       { label: "FORMA DE PAGO", value: r.formaPago || "Contado", w: contentW * 0.33 },
@@ -1188,11 +1225,11 @@ const PdfBuilder = {
     y = this.renderPanel(doc, termsCells, M, y, contentW, bgPanel, border, labelKey, textDark);
     y += 14;
 
-    // 5. TABLA PRODUCTOS
+    // 4. TABLA DE PRODUCTOS
     const cols = [
-      { key: "codigo", label: "CÓDIGO", w: 60, align: "center" },
-      { key: "descripcion", label: "DESCRIPCIÓN", w: contentW - 60 - 38 - 72 - 42 - 76, align: "left" },
-      { key: "cantidad", label: "CANT.", w: 38, align: "center" },
+      { key: "codigo", label: "CÓDIGO", w: 58, align: "center" },
+      { key: "descripcion", label: "DESCRIPCIÓN", w: contentW - 58 - 36 - 72 - 42 - 76, align: "left" },
+      { key: "cantidad", label: "CANT.", w: 36, align: "center" },
       { key: "vrUnitario", label: "VR. UNITARIO", w: 72, align: "right" },
       { key: "ivaPct", label: "IVA %", w: 42, align: "center" },
       { key: "valorTotal", label: "VR. TOTAL", w: 76, align: "right" }
@@ -1261,7 +1298,7 @@ const PdfBuilder = {
 
     y += 8;
 
-    // 6. TOTALES
+    // 5. TOTALES
     const totW = 195;
     const totX = pageW - M - totW;
 
@@ -1290,22 +1327,21 @@ const PdfBuilder = {
     doc.text(fmtCOP(r.total), totX + totW - 12, y + 15, { align: "right" });
     y += 34;
 
-    // 7. OBSERVACIONES + FIRMA
+    // 6. OBSERVACIONES + FIRMA
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
     const boxTop = y;
 
     const defaultObs =
-      "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n" +
-      "No somos grandes contribuyentes ni autorretenedores de renta.\n" +
-      "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021.\n" +
-      "Favor no practicar ReteICA en otros municipios.";
+      "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
+      "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
+      "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
 
     const obsText = (r.observaciones && r.observaciones.trim()) || defaultObs;
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.8);
+    doc.setFontSize(7.6);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
-    const obsH = Math.max(90, 26 + obsLines.length * 10.5);
+    const obsH = Math.max(92, 24 + obsLines.length * 10);
 
     doc.setFillColor(...bgPanel);
     doc.setDrawColor(...border);
@@ -1318,7 +1354,7 @@ const PdfBuilder = {
     doc.text("OBSERVACIONES Y CONDICIONES", M + 10, boxTop + 14);
 
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.8);
+    doc.setFontSize(7.6);
     doc.setTextColor(...textDark);
     doc.text(obsLines, M + 10, boxTop + 26);
 
@@ -1345,7 +1381,7 @@ const PdfBuilder = {
 
     y = boxTop + obsH + 16;
 
-    // 8. FOOTER
+    // 7. PIE DE PÁGINA
     doc.setDrawColor(...borderSoft);
     doc.setLineWidth(0.6);
     doc.line(M, y, pageW - M, y);
@@ -1367,7 +1403,7 @@ const PdfBuilder = {
   renderPanel(doc, cells, x0, y0, totalW, bgColor, borderColor, labelColor, valColor) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    const wrapped = cells.map(c => doc.splitTextToSize(String(c.value || "—"), c.w - 14));
+    const wrapped = cells.map(c => doc.splitTextToSize(String(c.value || "—"), c.w - 12));
     const maxLines = Math.max(1, ...wrapped.map(l => l.length));
     const h = 18 + maxLines * 11;
 
@@ -1385,12 +1421,12 @@ const PdfBuilder = {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(7.2);
       doc.setTextColor(...labelColor);
-      doc.text(c.label, curX + 7, y0 + 11);
+      doc.text(c.label, curX + 6, y0 + 11);
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(8.8);
       doc.setTextColor(...valColor);
-      doc.text(wrapped[idx], curX + 7, y0 + 23);
+      doc.text(wrapped[idx], curX + 6, y0 + 23);
 
       curX += c.w;
     });
