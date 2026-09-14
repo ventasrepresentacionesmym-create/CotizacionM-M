@@ -177,19 +177,16 @@ const AppInit = {
     }
 
     try {
-      // 1. Cargar Asesores
       const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
       if (dbAsesores && dbAsesores.length) {
         STATE.cyp.asesores = dbAsesores.map(a => a.nombre);
       }
 
-      // 2. Cargar Clientes
       const { data: dbClientes } = await sb.from("clientes").select("nombre, ciudad, nit").order("nombre");
       if (dbClientes && dbClientes.length) {
         STATE.cyp.clientes = dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
       }
 
-      // 3. Cargar Cotizaciones
       const { data: dbCotizaciones } = await sb.from("cotizaciones").select("*").order("created_at", { ascending: false });
       if (dbCotizaciones) {
         STATE.cotizaciones = dbCotizaciones.map(c => ({
@@ -211,7 +208,6 @@ const AppInit = {
         }));
       }
 
-      // 4. Cargar Productos (paginado de 1000 en 1000)
       let allProducts = [];
       let from = 0;
       const step = 1000;
@@ -256,49 +252,39 @@ if (document.readyState === "loading") {
    ============================================================ */
 const Views = {};
 
-/* ---------- ACTUALIZAR BASE DE DATOS (EXCEL -> SUPABASE) ---------- */
+/* ---------- ACTUALIZAR BASE DE DATOS ---------- */
 Views.renderActualizarExcel = function () {
   const el = document.getElementById("view-actualizar-excel");
   el.innerHTML = `
     <div class="section-head">
-      <h2>Sincronizar Base de Datos desde Excel</h2>
+      <h2>Actualizar Base de Datos de Productos y Clientes</h2>
       <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
 
     <div class="card">
-      <div style="font-size:16px;font-weight:700;color:var(--azul-950);margin-bottom:8px">
-        Opción A: Subir "Datos.xlsx"
+      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:6px">
+        1. Sincronización Automática con un Clic
       </div>
       <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
-        Si ya tienes el archivo consolidado <b>Datos.xlsx</b> con las columnas de productos y clientes, súbelo directamente aquí para actualizar Supabase en la nube.
+        Descarga <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en tu carpeta del computador y haz doble clic en el archivo <b>actualizar.bat</b>. ¡Eso sincroniza Supabase automáticamente!
       </div>
-      <input type="file" id="fileDatosXlsx" accept=".xlsx,.xls" style="margin-bottom:12px">
-      <button class="btn btn-accent" id="btnUploadDatos">Subir y Actualizar Supabase</button>
+      <button class="btn btn-accent" id="btnReloadSupabase">🔄 Recargar datos desde la Nube (Supabase)</button>
     </div>
 
     <div class="card">
-      <div style="font-size:16px;font-weight:700;color:var(--azul-950);margin-bottom:8px">
-        Opción B: Procesar los 2 archivos de origen
+      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:6px">
+        2. Subir Archivo Consolidado (Datos.html / Datos.json / Datos.xlsx)
       </div>
       <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
-        Selecciona <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b>. La aplicación los combinará automáticamente, filtrará los productos con su costo más alto y actualizará Supabase.
+        Selecciona el archivo <b>Datos.html</b> generado por el actualizador o tu <b>Datos.xlsx</b> para cargar y sincronizar los productos y clientes de inmediato:
       </div>
-      <div class="grid g2" style="margin-bottom:12px">
-        <div>
-          <label>1. Resumen de existencias (.xls / .xlsx)</label>
-          <input type="file" id="fileExistencias" accept=".xls,.xlsx">
-        </div>
-        <div>
-          <label>2. Directorio de clientes (.xls / .xlsx)</label>
-          <input type="file" id="fileDirectorio" accept=".xls,.xlsx">
-        </div>
-      </div>
-      <button class="btn btn-primary" id="btnProcessSources">Combinar, Actualizar y Descargar Datos.xlsx</button>
+      <input type="file" id="fileUniversal" accept=".html,.htm,.json,.xlsx,.xls" style="margin-bottom:12px">
+      <button class="btn btn-primary" id="btnUploadUniversal">Subir y Sincronizar con Supabase</button>
     </div>
 
     <div class="card" id="excelStatusCard" style="display:none">
-      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:8px">Estado de la Sincronización</div>
-      <div id="excelProgressBar" style="background:#e8f7f8;border-radius:8px;height:12px;overflow:hidden;margin-bottom:10px">
+      <div style="font-size:14px;font-weight:700;color:var(--azul-950);margin-bottom:8px">Progreso de la Sincronización</div>
+      <div id="excelProgressBar" style="background:#e2e8f0;border-radius:6px;height:10px;overflow:hidden;margin-bottom:10px">
         <div id="excelProgressFill" style="background:var(--teal-600);height:100%;width:0%;transition:width .2s"></div>
       </div>
       <div id="excelStatusLog" style="font-size:13px;color:var(--texto);white-space:pre-line;line-height:1.6"></div>
@@ -319,96 +305,117 @@ Views.renderActualizarExcel = function () {
     reader.onload = e => resolve(e.target.result);
     reader.onerror = e => reject(e);
     if (asBinary) reader.readAsArrayBuffer(file);
-    else reader.readAsText(file, "latin1");
+    else reader.readAsText(file, "utf-8");
   });
 
-  document.getElementById("btnUploadDatos").addEventListener("click", async () => {
-    const fileInput = document.getElementById("fileDatosXlsx");
-    if (!fileInput.files || !fileInput.files[0]) return toast("Selecciona el archivo Datos.xlsx", true);
-
-    const btn = document.getElementById("btnUploadDatos");
+  // Botón recargar desde Supabase
+  document.getElementById("btnReloadSupabase").addEventListener("click", async () => {
+    const btn = document.getElementById("btnReloadSupabase");
     btn.disabled = true;
+    btn.textContent = "Recargando...";
     try {
-      logStatus("Leyendo Datos.xlsx...", 20);
-      const buf = await readFile(fileInput.files[0], true);
-      const wb = XLSX.read(buf, { type: "array" });
-      const wsName = wb.SheetNames[0];
-      const ws = wb.Sheets[wsName];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-
-      if (rows.length < 3) throw new Error("El archivo no contiene filas suficientes.");
-
-      logStatus("Extrayendo productos y clientes...", 40);
-      const productos = [];
-      const clientes = [];
-
-      for (let i = 2; i < rows.length; i++) {
-        const r = rows[i];
-        const cod = r[0] != null ? String(r[0]).trim() : "";
-        const desc = r[1] != null ? String(r[1]).trim() : "";
-        if (cod || desc) {
-          productos.push({
-            codigo: cod,
-            descripcion: desc,
-            iva_pct: Number(r[2]) || 0,
-            existencia: Number(r[3]) || 0,
-            costo: Number(r[4]) || 0,
-            proveedor: r[8] || ""
-          });
-        }
-        const clNom = r[5] != null ? String(r[5]).trim() : "";
-        if (clNom) {
-          clientes.push({
-            nombre: clNom,
-            ciudad: r[6] != null ? String(r[6]).trim() : "",
-            nit: r[7] != null ? String(r[7]).trim() : ""
-          });
-        }
-      }
-
-      await syncWithSupabase(productos, clientes, logStatus);
-      toast("Base de datos en Supabase actualizada con éxito");
+      await AppInit.boot();
+      toast(`Datos actualizados desde la nube: ${STATE.datos.length} productos y ${STATE.cyp.clientes.length} clientes.`);
     } catch (e) {
-      console.error(e);
-      logStatus("❌ Error: " + e.message, 0);
-      toast("Error al procesar archivo: " + e.message, true);
+      toast("Error al conectar con la nube: " + e.message, true);
     } finally {
       btn.disabled = false;
+      btn.textContent = "🔄 Recargar datos desde la Nube (Supabase)";
     }
   });
 
-  document.getElementById("btnProcessSources").addEventListener("click", async () => {
-    const fExi = document.getElementById("fileExistencias").files[0];
-    const fDir = document.getElementById("fileDirectorio").files[0];
-    if (!fExi || !fDir) return toast("Debes seleccionar ambos archivos", true);
+  // Botón procesar archivo universal (HTML, JSON o XLSX)
+  document.getElementById("btnUploadUniversal").addEventListener("click", async () => {
+    const fileInput = document.getElementById("fileUniversal");
+    if (!fileInput.files || !fileInput.files[0]) return toast("Selecciona el archivo primero", true);
 
-    const btn = document.getElementById("btnProcessSources");
+    const file = fileInput.files[0];
+    const fileName = file.name.toLowerCase();
+    const btn = document.getElementById("btnUploadUniversal");
     btn.disabled = true;
+
     try {
-      logStatus("Leyendo archivos de existencias y directorio...", 20);
-      const exiText = await readFile(fExi, false);
-      const dirText = await readFile(fDir, false);
+      let productos = [];
+      let clientes = [];
 
-      logStatus("Procesando productos y clientes...", 40);
-      const productosMap = parseHtmlProductos(exiText);
-      const clientesList = parseHtmlClientes(dirText);
+      logStatus(`Leyendo archivo ${file.name}...`, 20);
 
-      const productos = Array.from(productosMap.values());
-      const clientes = clientesList;
+      if (fileName.endsWith(".json")) {
+        const text = await readFile(file, false);
+        const data = JSON.parse(text);
+        productos = data.productos || [];
+        clientes = data.clientes || [];
+      } else if (fileName.endsWith(".html") || fileName.endsWith(".htm")) {
+        const html = await readFile(file, false);
+        const rows = parseHtmlRows(html);
+        for (const r of rows) {
+          if (r.length < 5) continue;
+          const cod = r[0] != null ? String(r[0]).trim() : "";
+          const desc = r[1] != null ? String(r[1]).trim() : "";
+          if (cod || desc) {
+            productos.push({
+              codigo: cod,
+              descripcion: desc,
+              iva_pct: Number(r[2]) || 0,
+              existencia: Number(r[3]) || 0,
+              costo: Number(r[4]) || 0,
+              proveedor: r[5] || ""
+            });
+          }
+          const clNom = r[6] != null ? String(r[6]).trim() : "";
+          if (clNom) {
+            clientes.push({
+              nombre: clNom,
+              ciudad: r[7] != null ? String(r[7]).trim() : "",
+              nit: r[8] != null ? String(r[8]).trim() : ""
+            });
+          }
+        }
+      } else {
+        // XLSX o XLS
+        const buf = await readFile(file, true);
+        const wb = XLSX.read(buf, { type: "array" });
+        const wsName = wb.SheetNames[0];
+        const ws = wb.Sheets[wsName];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        for (let i = 2; i < rows.length; i++) {
+          const r = rows[i];
+          const cod = r[0] != null ? String(r[0]).trim() : "";
+          const desc = r[1] != null ? String(r[1]).trim() : "";
+          if (cod || desc) {
+            productos.push({
+              codigo: cod,
+              descripcion: desc,
+              iva_pct: Number(r[2]) || 0,
+              existencia: Number(r[3]) || 0,
+              costo: Number(r[4]) || 0,
+              proveedor: r[8] || ""
+            });
+          }
+          const clNom = r[5] != null ? String(r[5]).trim() : "";
+          if (clNom) {
+            clientes.push({
+              nombre: clNom,
+              ciudad: r[6] != null ? String(r[6]).trim() : "",
+              nit: r[7] != null ? String(r[7]).trim() : ""
+            });
+          }
+        }
+      }
 
-      logStatus(`Encontrados ${productos.length} productos y ${clientes.length} clientes. Sincronizando con Supabase...`, 60);
+      if (!productos.length && !clientes.length) {
+        throw new Error("No se encontraron productos ni clientes en el archivo seleccionado.");
+      }
 
+      logStatus(`Encontrados ${productos.length} productos y ${clientes.length} clientes. Sincronizando con Supabase...`, 50);
       await syncWithSupabase(productos, clientes, logStatus);
 
-      logStatus("Generando archivo Datos.xlsx consolidado...", 90);
-      downloadDatosWorkbook(productos, clientes);
-
-      logStatus(`✅ ¡Completado con éxito!\n- Productos sincronizados: ${productos.length}\n- Clientes sincronizados: ${clientes.length}\nSe ha descargado el archivo Datos.xlsx actualizado.`, 100);
-      toast("Sincronización completada con éxito");
+      logStatus(`✅ ¡Sincronización completada con éxito!\n- Productos en Supabase: ${productos.length}\n- Clientes en Supabase: ${clientes.length}`, 100);
+      toast("Base de datos actualizada con éxito");
     } catch (e) {
       console.error(e);
       logStatus("❌ Error: " + e.message, 0);
-      toast("Error al procesar: " + e.message, true);
+      toast("Error al sincronizar: " + e.message, true);
     } finally {
       btn.disabled = false;
     }
@@ -425,47 +432,6 @@ function parseHtmlRows(html) {
     result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
   }
   return result;
-}
-
-function parseHtmlProductos(html) {
-  const rows = parseHtmlRows(html);
-  const mapProd = new Map();
-  for (const cells of rows) {
-    if (cells.length < 13) continue;
-    const colA = cells[0], colB = cells[1], colD = cells[3], colM = cells[12];
-    if (!colB || /^TOTAL/i.test(colA) || /TOTAL/i.test(colB)) continue;
-    if (!colA.includes("|")) continue;
-    const codigo = colA.split("|")[0].trim();
-    if (!codigo) continue;
-    const ivaPct = (colD && (colD.startsWith("B") || colD.includes("19"))) ? 0.19 : 0;
-    const costo = Number(String(colM || "").replace(/\./g, "").replace(",", ".")) || 0;
-    const proveedor = cells[4] || "";
-
-    if (!mapProd.has(codigo)) {
-      mapProd.set(codigo, { codigo, descripcion: colB, iva_pct: ivaPct, existencia: 0, costo, proveedor });
-    } else {
-      const ex = mapProd.get(codigo);
-      if (costo > ex.costo) {
-        ex.costo = costo;
-        if (!ex.proveedor && proveedor) ex.proveedor = proveedor;
-      }
-    }
-  }
-  return mapProd;
-}
-
-function parseHtmlClientes(html) {
-  const rows = parseHtmlRows(html);
-  const clientes = [];
-  for (const cells of rows) {
-    if (cells.length < 6) continue;
-    let nombre = (cells[1] || "").replace(/^[,"\s]+/, "").trim();
-    const ciudad = (cells[3] || "").trim();
-    const nit = (cells[5] || "").trim();
-    if (!nombre) continue;
-    clientes.push({ nombre, ciudad, nit });
-  }
-  return clientes;
 }
 
 async function syncWithSupabase(productos, clientes, progressFn) {
@@ -496,24 +462,6 @@ async function syncWithSupabase(productos, clientes, progressFn) {
   STATE.datos = productos.map(p => [p.codigo, p.descripcion, p.iva_pct, p.existencia, p.costo, p.proveedor]);
   STATE.cyp.clientes = clientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
   persistStateLocal();
-}
-
-function downloadDatosWorkbook(productos, clientes) {
-  const filas = [["Resumen_de_existencias_UC", "", "", "", "", "Directorio", "", ""]];
-  filas.push(["Articulo", "Nombre", "Iva", "Exi", "Costo", "Nombre", "Ciudad", "Nit"]);
-  const total = Math.max(productos.length, clientes.length);
-  for (let i = 0; i < total; i++) {
-    const p = productos[i] || {};
-    const c = clientes[i] || {};
-    filas.push([
-      p.codigo || "", p.descripcion || "", p.iva_pct || 0,
-      p.existencia || 0, p.costo || 0, c.nombre || "", c.ciudad || "", c.nit || ""
-    ]);
-  }
-  const ws = XLSX.utils.aoa_to_sheet(filas);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Datos");
-  XLSX.writeFile(wb, "Datos.xlsx");
 }
 
 /* ---------- ASESORES ---------- */
