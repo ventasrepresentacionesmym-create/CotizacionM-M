@@ -178,35 +178,29 @@ const AppInit = {
 
     try {
       const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
-      if (dbAsesores && dbAsesores.length) {
-        STATE.cyp.asesores = dbAsesores.map(a => a.nombre);
-      }
+      STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
 
       const { data: dbClientes } = await sb.from("clientes").select("nombre, ciudad, nit").order("nombre");
-      if (dbClientes && dbClientes.length) {
-        STATE.cyp.clientes = dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
-      }
+      STATE.cyp.clientes = (dbClientes && Array.isArray(dbClientes)) ? dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit })) : [];
 
       const { data: dbCotizaciones } = await sb.from("cotizaciones").select("*").order("created_at", { ascending: false });
-      if (dbCotizaciones) {
-        STATE.cotizaciones = dbCotizaciones.map(c => ({
-          numero: c.numero,
-          fecha: c.fecha,
-          cliente: c.cliente_nombre,
-          nit: c.cliente_nit,
-          ciudad: c.cliente_ciudad,
-          contacto: c.contacto || "",
-          asesor: c.asesor_nombre,
-          tiempoEntrega: c.tiempo_entrega,
-          formaPago: c.forma_pago,
-          validez: c.validez,
-          observaciones: c.observaciones,
-          subtotal: Number(c.subtotal) || 0,
-          iva: Number(c.iva) || 0,
-          total: Number(c.total) || 0,
-          items: c.items || []
-        }));
-      }
+      STATE.cotizaciones = (dbCotizaciones && Array.isArray(dbCotizaciones)) ? dbCotizaciones.map(c => ({
+        numero: c.numero,
+        fecha: c.fecha,
+        cliente: c.cliente_nombre,
+        nit: c.cliente_nit,
+        ciudad: c.cliente_ciudad,
+        contacto: c.contacto || "",
+        asesor: c.asesor_nombre,
+        tiempoEntrega: c.tiempo_entrega,
+        formaPago: c.forma_pago,
+        validez: c.validez,
+        observaciones: c.observaciones,
+        subtotal: Number(c.subtotal) || 0,
+        iva: Number(c.iva) || 0,
+        total: Number(c.total) || 0,
+        items: c.items || []
+      })) : [];
 
       let allProducts = [];
       let from = 0;
@@ -222,16 +216,14 @@ const AppInit = {
           else from += step;
         }
       }
-      if (allProducts.length) {
-        STATE.datos = allProducts.map(p => [
-          p.codigo,
-          p.descripcion,
-          Number(p.iva_pct) || 0,
-          Number(p.existencia) || 0,
-          Number(p.costo) || 0,
-          p.proveedor || ""
-        ]);
-      }
+      STATE.datos = allProducts.map(p => [
+        p.codigo,
+        p.descripcion,
+        Number(p.iva_pct) || 0,
+        Number(p.existencia) || 0,
+        Number(p.costo) || 0,
+        p.proveedor || ""
+      ]);
 
       persistStateLocal();
       console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
