@@ -52,8 +52,7 @@ button{font-family:inherit;}
 
 /* ---------- Home ---------- */
 .home-wrap{display:flex;flex-direction:column;align-items:center;padding:46px 0 10px;text-align:center;}
-.home-logo{height:110px;object-fit:contain;margin-bottom:18px;}
-.home-sub{font-size:14px;font-weight:800;letter-spacing:.18em;color:var(--azul-950);margin-bottom:40px;}
+.home-logo{height:110px;object-fit:contain;margin-bottom:28px;}
 .menu-btns{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;max-width:640px;}
 .menu-btns .full{grid-column:1 / -1;}
 .mbtn{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,var(--teal-700),var(--teal-900));color:#fff;border:none;border-radius:var(--radio);padding:22px 22px;font-size:15.5px;font-weight:700;cursor:pointer;box-shadow:var(--sombra);transition:.15s;text-align:left;}
@@ -169,7 +168,6 @@ textarea{resize:vertical;min-height:70px;}
   <div class="view active" id="view-home">
     <div class="home-wrap">
       <img class="home-logo" src="assets/logo.png" alt="Representaciones M&M Medical">
-      <div class="home-sub">SISTEMA DE COTIZACIONES EN LA NUBE</div>
       <div class="menu-btns">
         <button class="mbtn" onclick="Router.go('nueva')">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6M9 17h4"/></svg>
