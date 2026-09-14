@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sistema de Cotizaciones · M&M Medical</title>
+<!-- Librerías de cliente en la nube -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="jspdf.umd.min.js"></script>
 <script src="assets/logo-b64.js"></script>
 <style>
@@ -36,9 +39,11 @@ button{font-family:inherit;}
 .app-shell.wide-nueva{max-width:1320px;}
 
 /* ---------- Topbar ---------- */
-.topbar{display:flex;align-items:center;justify-content:flex-end;padding:6px 0 10px;}
+.topbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:6px 0 10px;flex-wrap:wrap;}
 .top-btn{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--azul-950);background:#fff;border:1px solid var(--linea);padding:9px 16px;border-radius:30px;cursor:pointer;box-shadow:var(--sombra);transition:.15s;}
 .top-btn:hover{border-color:var(--azul-950);color:var(--azul-800);}
+.top-btn.accent{background:var(--teal-700);color:#fff;border-color:var(--teal-700);}
+.top-btn.accent:hover{background:var(--teal-800);color:#fff;}
 
 /* ---------- Views ---------- */
 .view{display:none;}
@@ -144,12 +149,19 @@ textarea{resize:vertical;min-height:70px;}
 .client-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding:10px 14px;border-bottom:1px solid #eef1f0;font-size:13px;}
 .client-row.head{font-size:10.5px;text-transform:uppercase;color:var(--texto-suave);font-weight:700;letter-spacing:.04em;}
 .chip{display:inline-flex;align-items:center;padding:6px 14px;border-radius:20px;background:#e8f7f8;color:var(--teal-800);font-size:12.5px;font-weight:700;}
+
+/* Status badge cloud */
+.cloud-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--teal-700);background:#e6f6f8;padding:4px 10px;border-radius:20px;}
+.cloud-dot{width:7px;height:7px;border-radius:50%;background:#159aab;display:inline-block;animation:pulse 2s infinite;}
+@keyframes pulse{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
 </style>
 </head>
 <body>
 <div class="app-shell">
 
   <div class="topbar" id="topbar">
+    <span class="cloud-badge" id="cloudStatus"><span class="cloud-dot"></span> Supabase Conectado</span>
+    <button class="top-btn" onclick="Router.go('actualizar-excel')">📊 Actualizar Datos (Excel)</button>
     <button class="top-btn" onclick="Router.go('asesores')">👤 Asesores</button>
   </div>
 
@@ -157,7 +169,7 @@ textarea{resize:vertical;min-height:70px;}
   <div class="view active" id="view-home">
     <div class="home-wrap">
       <img class="home-logo" src="assets/logo.png" alt="Representaciones M&M Medical">
-      <div class="home-sub">SISTEMA DE COTIZACIONES</div>
+      <div class="home-sub">SISTEMA DE COTIZACIONES EN LA NUBE</div>
       <div class="menu-btns">
         <button class="mbtn" onclick="Router.go('nueva')">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6M9 17h4"/></svg>
@@ -167,6 +179,10 @@ textarea{resize:vertical;min-height:70px;}
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           Cotizaciones guardadas
         </button>
+        <button class="mbtn full" onclick="Router.go('actualizar-excel')" style="background:linear-gradient(135deg, #1B3A6B, #0e5468);">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Actualizar Base de Datos (Excel → Supabase)
+        </button>
       </div>
     </div>
   </div>
@@ -174,6 +190,7 @@ textarea{resize:vertical;min-height:70px;}
   <div class="view" id="view-nueva"></div>
   <div class="view" id="view-guardadas"></div>
   <div class="view" id="view-asesores"></div>
+  <div class="view" id="view-actualizar-excel"></div>
 
 </div>
 

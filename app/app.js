@@ -1,44 +1,82 @@
 /* ============================================================
-   COTIZADOR M&M MEDICAL — app de escritorio (Electron)
-   Los datos de productos y clientes/asesores SOLO se actualizan
-   desde el Excel (macro). La app los lee automáticamente de la
-   carpeta donde está instalada. Las cotizaciones y su secuencia
-   se guardan localmente (estado_app.json) y solo se abren desde
-   aquí — no se genera ningún archivo editable en disco.
+   COTIZADOR M&M MEDICAL — Versión Cloud (GitHub + Supabase + Vercel)
    ============================================================ */
 
-let STATE = { datos: [], cyp: { clientes: [], asesores: [] }, cotizaciones: [], seq: {} };
-let PATHS = { datosDir: "", pdfDir: "", editableDir: "" };
+const SUPABASE_URL = "https://stljwvpwozeagnbzqkeh.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0bGp3dnB3b3plYWduYnpxa2VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNzMyNDIsImV4cCI6MjEwNDk0OTI0Mn0.sxDOIrsFbfKlUS3Sz5pLDgOAP7trVLL4OzKiXqgpNxI";
+
+const supabase = (window.supabase && window.supabase.createClient)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+let STATE = {
+  datos: [],
+  cyp: { clientes: [], asesores: [] },
+  cotizaciones: [],
+  seq: {}
+};
+
 let DRAFT = null;
 
-function persistState() { window.api.storeSet(STATE); }
+function persistStateLocal() {
+  try {
+    localStorage.setItem("cotizador_state_cache", JSON.stringify(STATE));
+  } catch (e) {}
+}
+
+function loadStateLocal() {
+  try {
+    const raw = localStorage.getItem("cotizador_state_cache");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") STATE = { ...STATE, ...parsed };
+    }
+  } catch (e) {}
+}
 
 const DB = {
   getDatos() { return STATE.datos || []; },
   getCYP() { return STATE.cyp || { clientes: [], asesores: [] }; },
   getCotizaciones() { return STATE.cotizaciones || []; },
-  setCotizaciones(v) { STATE.cotizaciones = v; persistState(); },
+  setCotizaciones(v) { STATE.cotizaciones = v; persistStateLocal(); },
   nextNumero() {
     const year = new Date().getFullYear();
-    const seq = STATE.seq || {};
-    const n = (seq[year] || 0) + 1;
-    return { preview: `C-${year}-${n}`, commit: () => { seq[year] = n; STATE.seq = seq; persistState(); } };
+    const cots = STATE.cotizaciones || [];
+    let maxN = 0;
+    cots.forEach(c => {
+      const m = String(c.numero || "").match(/^(?:C-)?(\d{4})-(\d+)$/);
+      if (m && Number(m[1]) === year) {
+        maxN = Math.max(maxN, parseInt(m[2], 10));
+      }
+    });
+    const nextVal = maxN + 1;
+    return {
+      preview: `C-${year}-${nextVal}`,
+      commit: () => {}
+    };
   }
 };
 
 function toast(msg, isError) {
   const t = document.getElementById("toast");
+  if (!t) return;
   t.textContent = msg;
   t.className = "toast show" + (isError ? " error" : "");
   clearTimeout(toast._h);
-  toast._h = setTimeout(() => t.classList.remove("show"), 3000);
+  toast._h = setTimeout(() => t.classList.remove("show"), 3500);
 }
-function fmtCOP(n) { n = Math.round(Number(n) || 0); return "$" + n.toLocaleString("es-CO"); }
-function parseNum(v) { if (typeof v === "number") return v; if (!v) return 0; return Number(String(v).replace(/[^0-9.-]/g, "")) || 0; }
 
-// escapa texto antes de insertarlo en HTML/atributos — muchas descripciones
-// reales de productos traen comillas (ej. medidas en pulgadas: 5/8"), y sin
-// esto rompían el HTML generado y causaban errores al abrir cotizaciones
+function fmtCOP(n) {
+  n = Math.round(Number(n) || 0);
+  return "$" + n.toLocaleString("es-CO");
+}
+
+function parseNum(v) {
+  if (typeof v === "number") return v;
+  if (!v) return 0;
+  return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
+}
+
 function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -46,35 +84,35 @@ function esc(s) {
 }
 
 /* ============================================================
-   ROUTER — conserva el borrador de "Nueva cotización" en memoria
-   (y en disco, por si hay un corte de luz) mientras el usuario
-   navega a otras pantallas sin guardar.
+   ROUTER
    ============================================================ */
 const Router = {
   current: "home",
   go(view, opts) {
     try {
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-      document.getElementById("view-" + view).classList.add("active");
-      document.querySelector(".app-shell").classList.toggle("wide-nueva", view === "nueva");
+      const target = document.getElementById("view-" + view);
+      if (target) target.classList.add("active");
+      const shell = document.querySelector(".app-shell");
+      if (shell) shell.classList.toggle("wide-nueva", view === "nueva");
       this.current = view;
       if (view === "nueva") Views.renderNueva(opts && opts.record);
       if (view === "guardadas") Views.renderGuardadas();
       if (view === "asesores") Views.renderAsesores();
+      if (view === "actualizar-excel") Views.renderActualizarExcel();
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
       console.error(e);
-      toast("Ocurrió un error abriendo esta pantalla: " + e.message, true);
+      toast("Error al abrir pantalla: " + e.message, true);
     }
   }
 };
 
-// cualquier error inesperado se muestra como aviso
-window.addEventListener("error", e => { console.error(e.error || e.message); toast("Error: " + (e.message || "algo falló"), true); });
-window.addEventListener("unhandledrejection", e => { console.error(e.reason); toast("Error: " + (e.reason && e.reason.message || "algo falló"), true); });
+window.addEventListener("error", e => { console.error(e.error || e.message); });
+window.addEventListener("unhandledrejection", e => { console.error(e.reason); });
 
 /* ============================================================
-   AUTOCOMPLETE genérico
+   AUTOCOMPLETE
    ============================================================ */
 function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemClass = "ac-item") {
   if (!inputEl || !listEl) return;
@@ -119,76 +157,366 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
 }
 
 /* ============================================================
-   ARRANQUE — lee datos.json / cyp.json automáticamente
+   INICIALIZACIÓN Y CARGA DE SUPABASE
    ============================================================ */
 const AppInit = {
-  async loadDatos() {
-    try {
-      const d = await window.api.readText(PATHS.datosDir + "/datos.json");
-      if (d.ok) STATE.datos = JSON.parse(d.content);
-    } catch (e) { console.warn("Error leyendo datos.json", e); }
-    try {
-      const c = await window.api.readText(PATHS.datosDir + "/cyp.json");
-      if (c.ok) STATE.cyp = JSON.parse(c.content);
-    } catch (e) { console.warn("Error leyendo cyp.json", e); }
-  },
   async boot() {
-    PATHS = await window.api.getPaths();
-    const saved = await window.api.storeGet();
-    const defaults = { datos: [], cyp: { clientes: [], asesores: [] }, cotizaciones: [], seq: {} };
-    STATE = (saved && typeof saved === "object" && saved.cotizaciones) ? { ...defaults, ...saved } : defaults;
-    DRAFT = null;
-    delete STATE.draft;
-    if (!STATE.cotizaciones.length) await this.recoverFromBackups();
-    await this.loadDatos();
-  },
+    loadStateLocal();
+    if (!supabase) {
+      console.warn("Supabase no está disponible, usando caché local.");
+      return;
+    }
 
-  // si no hay cotizaciones guardadas (ej. app recién reinstalada), se
-  // recuperan desde los respaldos .json de la carpeta Editable
-  async recoverFromBackups() {
     try {
-      const list = await window.api.listDir(PATHS.editableDir);
-      if (!list.ok || !list.files || !list.files.length) return;
-      const jsonFiles = list.files.filter(f => f.toLowerCase().endsWith(".json"));
-      const recovered = [];
-      for (const f of jsonFiles) {
-        const r = await window.api.readText(PATHS.editableDir + "/" + f);
-        if (r.ok) { try { recovered.push(JSON.parse(r.content)); } catch (e) {} }
+      // 1. Cargar Asesores
+      const { data: dbAsesores } = await supabase.from("asesores").select("nombre").order("nombre");
+      if (dbAsesores && dbAsesores.length) {
+        STATE.cyp.asesores = dbAsesores.map(a => a.nombre);
       }
-      if (recovered.length) {
-        STATE.cotizaciones = recovered;
-        // recalcula la secuencia para no repetir números
-        const seq = {};
-        recovered.forEach(r => {
-          // Admite los consecutivos anteriores (2026-0001) y el formato
-          // vigente C-2026-1 para no reiniciar ni duplicar la numeración.
-          const match = String(r.numero || "").match(/^(?:C-)?(\d{4})-(\d+)$/);
-          if (match) {
-            const [, year, n] = match;
-            seq[year] = Math.max(seq[year] || 0, parseInt(n, 10));
-          }
-        });
-        STATE.seq = seq;
-        persistState();
-        toast(`Se recuperaron ${recovered.length} cotizaciones desde el respaldo`);
+
+      // 2. Cargar Clientes
+      const { data: dbClientes } = await supabase.from("clientes").select("nombre, ciudad, nit").order("nombre");
+      if (dbClientes && dbClientes.length) {
+        STATE.cyp.clientes = dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
       }
-    } catch (e) { console.warn("No se pudo recuperar desde respaldos", e); }
+
+      // 3. Cargar Cotizaciones
+      const { data: dbCotizaciones } = await supabase.from("cotizaciones").select("*").order("created_at", { ascending: false });
+      if (dbCotizaciones) {
+        STATE.cotizaciones = dbCotizaciones.map(c => ({
+          numero: c.numero,
+          fecha: c.fecha,
+          cliente: c.cliente_nombre,
+          nit: c.cliente_nit,
+          ciudad: c.cliente_ciudad,
+          contacto: c.contacto || "",
+          asesor: c.asesor_nombre,
+          tiempoEntrega: c.tiempo_entrega,
+          formaPago: c.forma_pago,
+          validez: c.validez,
+          observaciones: c.observaciones,
+          subtotal: Number(c.subtotal) || 0,
+          iva: Number(c.iva) || 0,
+          total: Number(c.total) || 0,
+          items: c.items || []
+        }));
+      }
+
+      // 4. Cargar Productos (por páginas si hay muchos)
+      let allProducts = [];
+      let from = 0;
+      const step = 1000;
+      let hasMore = true;
+      while (hasMore) {
+        const { data: dbProd, error } = await supabase.from("productos").select("codigo, descripcion, iva_pct, existencia, costo, proveedor").range(from, from + step - 1);
+        if (error || !dbProd || !dbProd.length) {
+          hasMore = false;
+        } else {
+          allProducts.push(...dbProd);
+          if (dbProd.length < step) hasMore = false;
+          else from += step;
+        }
+      }
+      if (allProducts.length) {
+        STATE.datos = allProducts.map(p => [
+          p.codigo,
+          p.descripcion,
+          Number(p.iva_pct) || 0,
+          Number(p.existencia) || 0,
+          Number(p.costo) || 0,
+          p.proveedor || ""
+        ]);
+      }
+
+      persistStateLocal();
+      console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
+    } catch (e) {
+      console.error("Error sincronizando con Supabase:", e);
+    }
   }
 };
-AppInit.boot();
+
+document.addEventListener("DOMContentLoaded", () => AppInit.boot());
 
 /* ============================================================
    VISTAS
    ============================================================ */
 const Views = {};
 
-/* ---------- ASESORES + ACTUALIZACIÓN DE DATOS ---------- */
+/* ---------- ACTUALIZAR BASE DE DATOS (EXCEL -> SUPABASE) ---------- */
+Views.renderActualizarExcel = function () {
+  const el = document.getElementById("view-actualizar-excel");
+  el.innerHTML = `
+    <div class="section-head">
+      <h2>Sincronizar Base de Datos desde Excel</h2>
+      <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
+    </div>
+
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;color:var(--azul-950);margin-bottom:8px">
+        Opción A: Subir "Datos.xlsx"
+      </div>
+      <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
+        Si ya tienes el archivo consolidado <b>Datos.xlsx</b> con las columnas de productos y clientes, súbelo directamente aquí para actualizar Supabase en la nube.
+      </div>
+      <input type="file" id="fileDatosXlsx" accept=".xlsx,.xls" style="margin-bottom:12px">
+      <button class="btn btn-accent" id="btnUploadDatos">Subir y Actualizar Supabase</button>
+    </div>
+
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;color:var(--azul-950);margin-bottom:8px">
+        Opción B: Procesar los 2 archivos de origen
+      </div>
+      <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">
+        Selecciona <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b>. La aplicación los combinará automáticamente, filtrará los productos con su costo más alto y actualizará Supabase.
+      </div>
+      <div class="grid g2" style="margin-bottom:12px">
+        <div>
+          <label>1. Resumen de existencias (.xls / .xlsx)</label>
+          <input type="file" id="fileExistencias" accept=".xls,.xlsx">
+        </div>
+        <div>
+          <label>2. Directorio de clientes (.xls / .xlsx)</label>
+          <input type="file" id="fileDirectorio" accept=".xls,.xlsx">
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnProcessSources">Combinar, Actualizar y Descargar Datos.xlsx</button>
+    </div>
+
+    <div class="card" id="excelStatusCard" style="display:none">
+      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:8px">Estado de la Sincronización</div>
+      <div id="excelProgressBar" style="background:#e8f7f8;border-radius:8px;height:12px;overflow:hidden;margin-bottom:10px">
+        <div id="excelProgressFill" style="background:var(--teal-600);height:100%;width:0%;transition:width .2s"></div>
+      </div>
+      <div id="excelStatusLog" style="font-size:13px;color:var(--texto);white-space:pre-line;line-height:1.6"></div>
+    </div>
+  `;
+
+  const logStatus = (msg, pct) => {
+    const card = document.getElementById("excelStatusCard");
+    const log = document.getElementById("excelStatusLog");
+    const fill = document.getElementById("excelProgressFill");
+    if (card) card.style.display = "block";
+    if (log) log.textContent = msg;
+    if (fill && pct != null) fill.style.width = pct + "%";
+  };
+
+  // Helper para leer archivo como ArrayBuffer o Text
+  const readFile = (file, asBinary) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = e => reject(e);
+    if (asBinary) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file, "latin1");
+  });
+
+  // Procesar Opción A: Datos.xlsx
+  document.getElementById("btnUploadDatos").addEventListener("click", async () => {
+    const fileInput = document.getElementById("fileDatosXlsx");
+    if (!fileInput.files || !fileInput.files[0]) return toast("Selecciona el archivo Datos.xlsx", true);
+
+    const btn = document.getElementById("btnUploadDatos");
+    btn.disabled = true;
+    try {
+      logStatus("Leyendo Datos.xlsx...", 20);
+      const buf = await readFile(fileInput.files[0], true);
+      const wb = XLSX.read(buf, { type: "array" });
+      const wsName = wb.SheetNames[0];
+      const ws = wb.Sheets[wsName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+      if (rows.length < 3) throw new Error("El archivo no contiene filas suficientes.");
+
+      logStatus("Extrayendo productos y clientes...", 40);
+      const productos = [];
+      const clientes = [];
+
+      for (let i = 2; i < rows.length; i++) {
+        const r = rows[i];
+        const cod = r[0] != null ? String(r[0]).trim() : "";
+        const desc = r[1] != null ? String(r[1]).trim() : "";
+        if (cod || desc) {
+          productos.push({
+            codigo: cod,
+            descripcion: desc,
+            iva_pct: Number(r[2]) || 0,
+            existencia: Number(r[3]) || 0,
+            costo: Number(r[4]) || 0,
+            proveedor: r[8] || ""
+          });
+        }
+        const clNom = r[5] != null ? String(r[5]).trim() : "";
+        if (clNom) {
+          clientes.push({
+            nombre: clNom,
+            ciudad: r[6] != null ? String(r[6]).trim() : "",
+            nit: r[7] != null ? String(r[7]).trim() : ""
+          });
+        }
+      }
+
+      await syncWithSupabase(productos, clientes, logStatus);
+      toast("Base de datos en Supabase actualizada con éxito");
+    } catch (e) {
+      console.error(e);
+      logStatus("❌ Error: " + e.message, 0);
+      toast("Error al procesar archivo: " + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Procesar Opción B: Resumen + Directorio
+  document.getElementById("btnProcessSources").addEventListener("click", async () => {
+    const fExi = document.getElementById("fileExistencias").files[0];
+    const fDir = document.getElementById("fileDirectorio").files[0];
+    if (!fExi || !fDir) return toast("Debes seleccionar ambos archivos", true);
+
+    const btn = document.getElementById("btnProcessSources");
+    btn.disabled = true;
+    try {
+      logStatus("Leyendo archivos de existencias y directorio...", 20);
+      const exiText = await readFile(fExi, false);
+      const dirText = await readFile(fDir, false);
+
+      logStatus("Procesando productos y clientes...", 40);
+      const productosMap = parseHtmlProductos(exiText);
+      const clientesList = parseHtmlClientes(dirText);
+
+      const productos = Array.from(productosMap.values());
+      const clientes = clientesList;
+
+      logStatus(`Encontrados ${productos.length} productos y ${clientes.length} clientes. Sincronizando con Supabase...`, 60);
+
+      await syncWithSupabase(productos, clientes, logStatus);
+
+      // Generar Datos.xlsx para descargar
+      logStatus("Generando archivo Datos.xlsx consolidado...", 90);
+      downloadDatosWorkbook(productos, clientes);
+
+      logStatus(`✅ ¡Completado con éxito!\n- Productos sincronizados: ${productos.length}\n- Clientes sincronizados: ${clientes.length}\nSe ha descargado el archivo Datos.xlsx actualizado.`, 100);
+      toast("Sincronización completada con éxito");
+    } catch (e) {
+      console.error(e);
+      logStatus("❌ Error: " + e.message, 0);
+      toast("Error al procesar: " + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+};
+
+/* Parsers de HTML tablas exportadas de ERP (.xls) */
+function parseHtmlRows(html) {
+  const trBlocks = html.split(/<tr[^>]*>/i);
+  const result = [];
+  for (let b = 1; b < trBlocks.length; b++) {
+    const block = trBlocks[b];
+    const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<td|$)/gi)];
+    if (!tdMatches.length) continue;
+    result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
+  }
+  return result;
+}
+
+function parseHtmlProductos(html) {
+  const rows = parseHtmlRows(html);
+  const mapProd = new Map();
+  for (const cells of rows) {
+    if (cells.length < 13) continue;
+    const colA = cells[0], colB = cells[1], colD = cells[3], colM = cells[12];
+    if (!colB || /^TOTAL/i.test(colA) || /TOTAL/i.test(colB)) continue;
+    if (!colA.includes("|")) continue;
+    const codigo = colA.split("|")[0].trim();
+    if (!codigo) continue;
+    const ivaPct = (colD && (colD.startsWith("B") || colD.includes("19"))) ? 0.19 : 0;
+    const costo = Number(String(colM || "").replace(/\./g, "").replace(",", ".")) || 0;
+    const proveedor = cells[4] || "";
+
+    if (!mapProd.has(codigo)) {
+      mapProd.set(codigo, { codigo, descripcion: colB, iva_pct: ivaPct, existencia: 0, costo, proveedor });
+    } else {
+      const ex = mapProd.get(codigo);
+      if (costo > ex.costo) {
+        ex.costo = costo;
+        if (!ex.proveedor && proveedor) ex.proveedor = proveedor;
+      }
+    }
+  }
+  return mapProd;
+}
+
+function parseHtmlClientes(html) {
+  const rows = parseHtmlRows(html);
+  const clientes = [];
+  for (const cells of rows) {
+    if (cells.length < 6) continue;
+    let nombre = (cells[1] || "").replace(/^[,"\s]+/, "").trim();
+    const ciudad = (cells[3] || "").trim();
+    const nit = (cells[5] || "").trim();
+    if (!nombre) continue;
+    clientes.push({ nombre, ciudad, nit });
+  }
+  return clientes;
+}
+
+async function syncWithSupabase(productos, clientes, progressFn) {
+  if (!supabase) throw new Error("Supabase no está configurado.");
+
+  // 1. Limpiar e insertar Productos en bloques de 500
+  progressFn("Limpiando productos anteriores en Supabase...", 50);
+  await supabase.from("productos").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+  const chunk = 500;
+  for (let i = 0; i < productos.length; i += chunk) {
+    const slice = productos.slice(i, i + chunk);
+    const { error } = await supabase.from("productos").insert(slice);
+    if (error) console.warn("Error subiendo bloque de productos:", error);
+    const pct = Math.min(85, Math.round(50 + (i / productos.length) * 30));
+    progressFn(`Subiendo productos a Supabase: ${Math.min(i + chunk, productos.length)} de ${productos.length}...`, pct);
+  }
+
+  // 2. Limpiar e insertar Clientes en bloques de 500
+  progressFn("Actualizando clientes en Supabase...", 85);
+  await supabase.from("clientes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+  for (let i = 0; i < clientes.length; i += chunk) {
+    const slice = clientes.slice(i, i + chunk);
+    const { error } = await supabase.from("clientes").insert(slice);
+    if (error) console.warn("Error subiendo bloque de clientes:", error);
+  }
+
+  // Actualizar estado local inmediatamente
+  STATE.datos = productos.map(p => [p.codigo, p.descripcion, p.iva_pct, p.existencia, p.costo, p.proveedor]);
+  STATE.cyp.clientes = clientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
+  persistStateLocal();
+}
+
+function downloadDatosWorkbook(productos, clientes) {
+  const filas = [["Resumen_de_existencias_UC", "", "", "", "", "Directorio", "", ""]];
+  filas.push(["Articulo", "Nombre", "Iva", "Exi", "Costo", "Nombre", "Ciudad", "Nit"]);
+  const total = Math.max(productos.length, clientes.length);
+  for (let i = 0; i < total; i++) {
+    const p = productos[i] || {};
+    const c = clientes[i] || {};
+    filas.push([
+      p.codigo || "", p.descripcion || "", p.iva_pct || 0,
+      p.existencia || 0, p.costo || 0, c.nombre || "", c.ciudad || "", c.nit || ""
+    ]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Datos");
+  XLSX.writeFile(wb, "Datos.xlsx");
+}
+
+/* ---------- ASESORES ---------- */
 Views.renderAsesores = function () {
   const el = document.getElementById("view-asesores");
   el.innerHTML = `
     <div class="section-head">
       <h2>Asesores</h2>
-      <span class="back" onclick="Router.go('home')">← Volver</span>
+      <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
     <div class="card">
       <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:12px">Administrar asesores</div>
@@ -197,12 +525,6 @@ Views.renderAsesores = function () {
         <button class="btn btn-accent" id="addAsesorBtn">+ Agregar</button>
       </div>
       <div id="asesorList"></div>
-    </div>
-    <div class="card">
-      <div style="font-size:15px;font-weight:700;color:var(--azul-950);margin-bottom:7px">Actualizar datos de cotización</div>
-      <div style="font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:14px">Lee <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> de la carpeta <b>Cotizador</b>, genera <b>Datos.xlsx</b> y actualiza los productos y clientes disponibles para cotizar.</div>
-      <button class="btn btn-accent" id="importDatosBtn">Actualizar Datos desde Excel</button>
-      <div id="importDatosResult" style="font-size:12px;color:var(--texto-suave);margin-top:10px"></div>
     </div>
   `;
 
@@ -215,17 +537,18 @@ Views.renderAsesores = function () {
     return STATE.cyp.asesores;
   }
 
-  async function saveAsesores(asesores) {
-    if (!STATE.cyp) STATE.cyp = { clientes: [], asesores: [] };
-    STATE.cyp.asesores = Array.isArray(asesores) ? asesores : [];
-    persistState();
+  async function syncAsesoresToSupabase(nuevoNombre, accion, nombreAntiguo) {
+    if (!supabase) return;
     try {
-      const res = await window.api.writeFile(PATHS.datosDir, "cyp.json", JSON.stringify(STATE.cyp, null, 2), false);
-      if (!res || !res.ok) {
-        console.warn("Advertencia al escribir cyp.json:", res && res.error);
+      if (accion === "add") {
+        await supabase.from("asesores").insert([{ nombre: nuevoNombre }]);
+      } else if (accion === "edit") {
+        await supabase.from("asesores").update({ nombre: nuevoNombre }).eq("nombre", nombreAntiguo);
+      } else if (accion === "delete") {
+        await supabase.from("asesores").delete().eq("nombre", nuevoNombre);
       }
     } catch (e) {
-      console.warn("Error guardando cyp.json:", e);
+      console.warn("Error sincronizando asesor con Supabase:", e);
     }
   }
 
@@ -267,7 +590,6 @@ Views.renderAsesores = function () {
       `;
     }).join("");
 
-    // Focus input if editing
     if (editingIndex >= 0) {
       const editInp = document.getElementById(`editAsesorInput_${editingIndex}`);
       if (editInp) {
@@ -285,7 +607,6 @@ Views.renderAsesores = function () {
       }
     }
 
-    // Event listeners
     list.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => {
       editingIndex = Number(btn.dataset.edit);
       deletingIndex = -1;
@@ -298,12 +619,15 @@ Views.renderAsesores = function () {
       const nuevo = input ? input.value.trim() : "";
       if (!nuevo) return toast("El nombre no puede quedar vacío", true);
       const asesoresActuales = [...getAsesoresList()];
+      const antiguo = asesoresActuales[i];
       if (asesoresActuales.some((a, j) => j !== i && a.toLowerCase() === nuevo.toLowerCase())) {
         return toast("Ya existe un asesor con ese nombre", true);
       }
       asesoresActuales[i] = nuevo;
+      STATE.cyp.asesores = asesoresActuales;
+      persistStateLocal();
       editingIndex = -1;
-      await saveAsesores(asesoresActuales);
+      await syncAsesoresToSupabase(nuevo, "edit", antiguo);
       toast("Asesor actualizado con éxito");
       paintAsesores();
     }));
@@ -323,11 +647,13 @@ Views.renderAsesores = function () {
       const i = Number(btn.dataset.confirmDel);
       const asesoresActuales = [...getAsesoresList()];
       if (i >= 0 && i < asesoresActuales.length) {
-        const removed = asesoresActuales.splice(i, 1);
+        const removed = asesoresActuales.splice(i, 1)[0];
         deletingIndex = -1;
         editingIndex = -1;
-        await saveAsesores(asesoresActuales);
-        toast(`Asesor "${removed[0]}" eliminado`);
+        STATE.cyp.asesores = asesoresActuales;
+        persistStateLocal();
+        await syncAsesoresToSupabase(removed, "delete");
+        toast(`Asesor "${removed}" eliminado`);
         paintAsesores();
       }
     }));
@@ -349,10 +675,12 @@ Views.renderAsesores = function () {
       return toast("Ese asesor ya existe", true);
     }
     asesoresActuales.push(nombre);
+    STATE.cyp.asesores = asesoresActuales;
+    persistStateLocal();
     addInput.value = "";
     editingIndex = -1;
     deletingIndex = -1;
-    await saveAsesores(asesoresActuales);
+    await syncAsesoresToSupabase(nombre, "add");
     toast("Asesor agregado correctamente");
     paintAsesores();
     addInput.focus();
@@ -361,24 +689,10 @@ Views.renderAsesores = function () {
   addBtn.addEventListener("click", handleAdd);
   addInput.addEventListener("keydown", e => { if (e.key === "Enter") handleAdd(); });
 
-  document.getElementById("importDatosBtn").addEventListener("click", async () => {
-    const btn = document.getElementById("importDatosBtn"), resultEl = document.getElementById("importDatosResult");
-    btn.disabled = true; btn.textContent = "Actualizando…"; resultEl.textContent = "Leyendo los archivos de Excel…";
-    const result = await window.api.importSourceWorkbooks(getAsesoresList());
-    btn.disabled = false; btn.textContent = "Actualizar Datos desde Excel";
-    if (!result.ok) { resultEl.textContent = ""; return toast("No se pudieron actualizar los datos: " + (result.error || "error desconocido"), true); }
-    await AppInit.loadDatos();
-    persistState();
-    resultEl.textContent = `Actualizado: ${result.productos} productos y ${result.clientes} clientes.`;
-    toast("Datos actualizados desde Excel");
-  });
-
   paintAsesores();
 };
 
-/* ============================================================
-   COTIZACIONES GUARDADAS
-   ============================================================ */
+/* ---------- COTIZACIONES GUARDADAS ---------- */
 Views.renderGuardadas = function () {
   const el = document.getElementById("view-guardadas");
   const cot = DB.getCotizaciones().slice().sort((a, b) => b.numero.localeCompare(a.numero, undefined, { numeric: true }));
@@ -398,8 +712,6 @@ Views.renderGuardadas = function () {
       <div class="list-row" data-numero="${esc(c.numero)}">
         <span class="n">${esc(c.numero)}</span><span>${esc(c.cliente || "—")}</span><span>${esc(c.fecha)}</span><span>${esc(c.asesor || "—")}</span><span>${fmtCOP(c.total)}</span>
       </div>`).join("") : `<div class="empty"><div class="ic">🔍</div>Sin resultados</div>`;
-    // clic manejado en JS, no como texto embebido en el HTML — evita que
-    // caracteres especiales en los datos rompan el atributo onclick
     list.querySelectorAll(".list-row[data-numero]").forEach(row => {
       row.addEventListener("click", () => Router.go("nueva", { record: row.dataset.numero }));
     });
@@ -409,9 +721,7 @@ Views.renderGuardadas = function () {
   if (!cot.length) list.innerHTML = `<div class="empty"><div class="ic">🗂️</div>Aún no hay cotizaciones guardadas.</div>`;
 };
 
-/* ============================================================
-   NUEVA / EDITAR COTIZACIÓN
-   ============================================================ */
+/* ---------- NUEVA / EDITAR COTIZACIÓN ---------- */
 Views.renderNueva = function (numeroToLoad) {
   const el = document.getElementById("view-nueva");
   const existing = numeroToLoad ? DB.getCotizaciones().find(c => c.numero === numeroToLoad) : null;
@@ -420,7 +730,6 @@ Views.renderNueva = function (numeroToLoad) {
   const numeroDisplay = isEdit ? existing.numero : "Se asigna al guardar";
   const hoy = new Date().toISOString().slice(0, 10);
 
-  // Modo edición conserva el número; nueva cotización inicia en limpio
   Cotizador._editingNumero = isEdit ? existing.numero : null;
 
   el.innerHTML = `
@@ -492,13 +801,12 @@ Views.renderNueva = function (numeroToLoad) {
 
     <div class="btn-row">
       <button class="btn btn-ghost" onclick="Cotizador.save(false)">${isEdit ? "Guardar cambios" : "Guardar cotización"}</button>
-      <button class="btn btn-accent" onclick="Cotizador.save(true)">${isEdit ? "Guardar cambios y actualizar PDF" : "Guardar y generar PDF"}</button>
+      <button class="btn btn-accent" onclick="Cotizador.save(true)">${isEdit ? "Guardar cambios y descargar PDF" : "Guardar y generar PDF"}</button>
       ${isEdit ? `<button class="btn btn-danger" id="btnEliminar">Eliminar cotización</button>` : ""}
       <button class="btn btn-ghost" onclick="Router.go('guardadas')" style="margin-left:auto">Ver cotizaciones guardadas</button>
     </div>
   `;
 
-  // Inicialización de productos: desde la cotización existente o una fila limpia
   if (isEdit && source && source.items && source.items.length) {
     ItemsUI.items = JSON.parse(JSON.stringify(source.items));
   } else {
@@ -523,7 +831,7 @@ Views.renderNueva = function (numeroToLoad) {
   );
 };
 
-/* ---------- ITEMS UI: Productos y Autocomplete mejorado ---------- */
+/* ---------- ITEMS UI ---------- */
 const ItemsUI = { items: [] };
 ItemsUI.add = function () {
   this.items.push({ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25 });
@@ -653,7 +961,7 @@ ItemsUI.recalc = function () {
 };
 
 /* ============================================================
-   GUARDAR / GENERAR PDF (Soporta creación y reescritura exacta)
+   COTIZADOR — GUARDAR EN SUPABASE & GENERAR PDF
    ============================================================ */
 const Cotizador = {
   _editingNumero: null,
@@ -691,16 +999,10 @@ const Cotizador = {
   async save(withPdf) {
     const data = this.collect();
     const missing = this.validate(data);
-    if (missing.length) {
-      toast("Falta completar: " + missing.join(", "), true);
-      return;
-    }
+    if (missing.length) return toast("Falta completar: " + missing.join(", "), true);
 
     const items = ItemsUI.items.filter(it => (it.codigo && String(it.codigo).trim()) || (it.descripcion && String(it.descripcion).trim()));
-    if (!items.length) {
-      toast("Debes agregar al menos un producto a la cotización", true);
-      return;
-    }
+    if (!items.length) return toast("Debes agregar al menos un producto", true);
 
     let subtotal = 0, iva = 0;
     items.forEach(it => {
@@ -717,63 +1019,67 @@ const Cotizador = {
     if (!numero) {
       const seq = DB.nextNumero();
       numero = seq.preview;
-      seq.commit();
     }
 
     const record = { numero, ...data, items, subtotal, iva, total: subtotal + iva };
 
-    // Si ya existía, se reescribe sobre el mismo registro; si es nueva, se agrega
+    // Actualizar estado local
     const all = [...DB.getCotizaciones()];
     const idx = all.findIndex(c => c.numero === numero);
-    if (idx >= 0) {
-      all[idx] = record;
-    } else {
-      all.push(record);
-    }
+    if (idx >= 0) all[idx] = record;
+    else all.push(record);
     DB.setCotizaciones(all);
 
     this._editingNumero = null;
     DRAFT = null;
-    delete STATE.draft;
-    persistState();
+    persistStateLocal();
 
-    toast(
-      isEdit
-        ? (withPdf ? `Cotización ${numero} actualizada y PDF regenerado` : `Cotización ${numero} actualizada`)
-        : (withPdf ? `Cotización ${numero} guardada y PDF generado` : `Cotización ${numero} guardada`)
-    );
-
-    // Guardado de respaldo en Editable/ y PDF en PDF/
-    try {
-      await this.writeBackup(record);
-    } catch (e) {
-      console.error(e);
-      toast("No se pudo guardar el respaldo: " + e.message, true);
-    }
-
-    if (withPdf) {
+    // Guardar en Supabase
+    if (supabase) {
       try {
-        await this.writePdf(record);
+        const { error } = await supabase.from("cotizaciones").upsert({
+          numero: record.numero,
+          fecha: record.fecha,
+          cliente_nombre: record.cliente,
+          cliente_nit: record.nit,
+          cliente_ciudad: record.ciudad,
+          asesor_nombre: record.asesor,
+          tiempo_entrega: record.tiempoEntrega,
+          forma_pago: record.formaPago,
+          validez: record.validez,
+          observaciones: record.observaciones,
+          subtotal: record.subtotal,
+          iva: record.iva,
+          total: record.total,
+          items: record.items,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "numero" });
+        if (error) console.warn("Advertencia al guardar en Supabase:", error);
       } catch (e) {
-        console.error(e);
-        toast("No se pudo generar el PDF: " + e.message, true);
+        console.warn("Error guardando en Supabase:", e);
       }
     }
 
-    // Regresa a cotizaciones guardadas para ver el registro actualizado
+    toast(isEdit ? `Cotización ${numero} actualizada` : `Cotización ${numero} guardada`);
+
+    if (withPdf) {
+      await this.writePdf(record);
+    }
+
     Router.go("guardadas");
   },
 
-  remove(numero) {
+  async remove(numero) {
     DB.setCotizaciones(DB.getCotizaciones().filter(c => c.numero !== numero));
+    if (supabase) {
+      try {
+        await supabase.from("cotizaciones").delete().eq("numero", numero);
+      } catch (e) {
+        console.warn("Error eliminando en Supabase:", e);
+      }
+    }
     toast(`Cotización ${numero} eliminada`);
-    Router.go('guardadas');
-  },
-
-  async writeBackup(record) {
-    const filename = `Cotizacion ${record.numero}.json`;
-    const res = await window.api.writeFile(PATHS.editableDir, filename, JSON.stringify(record, null, 2), false);
-    if (!res.ok) throw new Error(res.error || "error desconocido");
+    Router.go("guardadas");
   },
 
   async writePdf(record) {
@@ -782,71 +1088,73 @@ const Cotizador = {
       blob = PdfBuilder.build(record);
     } catch (e) {
       console.error(e);
-      toast("No se pudo generar el PDF: " + e.message, true);
-      return;
+      return toast("No se pudo generar el PDF: " + e.message, true);
     }
-    const filename = `Cotizacion ${record.numero}.pdf`;
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    if (bytes.length < 500) { toast("El PDF salió vacío, no se guardó. Intenta de nuevo.", true); return; }
-    const res = await window.api.writeFile(PATHS.pdfDir, filename, Array.from(bytes), true);
-    if (res.ok) toast(`PDF de cotización ${record.numero} guardado`);
-    else toast("No se pudo guardar el PDF: " + res.error, true);
+
+    const filename = `Cotizacion_${record.numero}.pdf`;
+
+    // Subir a Supabase Storage
+    if (supabase) {
+      try {
+        await supabase.storage.from("cotizaciones-pdf").upload(filename, blob, { upsert: true });
+      } catch (e) {
+        console.warn("Error subiendo PDF a Supabase Storage:", e);
+      }
+    }
+
+    // Descargar en el navegador
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Cotizacion ${record.numero}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast(`PDF de cotización ${record.numero} descargado`);
   }
 };
 
 /* ============================================================
-   GENERADOR DE PDF (jsPDF) — formato oficial de la empresa
-   Replica exactamente el diseño de Cotizacion_MODELO.html
+   GENERADOR DE PDF (jsPDF) — formato oficial
    ============================================================ */
 const PdfBuilder = {
   build(r) {
     const { jsPDF } = window.jspdf;
-    const pageW = 595.28; // Ancho A4 / Letter estándar en puntos
-
-    // primera pasada (solo para medir): se dibuja en una página alta de
-    // sobra y se ve dónde terminó el contenido real
+    const pageW = 595.28;
     const probe = new jsPDF({ unit: "pt", format: [pageW, 3000], orientation: "p" });
     const finalY = this.renderContent(probe, r, pageW);
-
-    // segunda pasada: se crea la página con altura vertical estándar (mínimo A4 841.89 pt),
-    // adaptándose hacia abajo si la cotización tiene más ítems de los habituales.
     const minH = 841.89;
     const finalH = Math.max(finalY + 30, minH);
     const doc = new jsPDF({ unit: "pt", format: [pageW, finalH], orientation: "p" });
     this.renderContent(doc, r, pageW);
-
     return doc.output("blob");
   },
 
   renderContent(doc, r, pageW) {
     const M = 36;
     const contentW = pageW - 2 * M;
-
-    // Colores corporativos basados en Cotizacion_MODELO.html
-    const navy = [27, 58, 107];       // #1B3A6B
-    const bgBadge = [238, 242, 247];   // #eef2f7
-    const bgPanel = [250, 251, 252];   // #fafbfc
-    const bgZebra = [247, 249, 251];   // #f7f9fb
-    const border = [214, 222, 232];    // #d6dee8
-    const borderSoft = [230, 234, 240];// #e6eaf0
-    const textDark = [43, 43, 43];     // #2b2b2b
-    const textMuted = [102, 102, 102]; // #666666
-    const labelKey = [138, 148, 163];  // #8a94a3
-    const footerColor = [154, 163, 177];// #9aa3b1
+    const navy = [27, 58, 107];
+    const bgBadge = [238, 242, 247];
+    const bgPanel = [250, 251, 252];
+    const bgZebra = [247, 249, 251];
+    const border = [214, 222, 232];
+    const borderSoft = [230, 234, 240];
+    const textDark = [43, 43, 43];
+    const textMuted = [102, 102, 102];
+    const labelKey = [138, 148, 163];
+    const footerColor = [154, 163, 177];
 
     let y = 28;
 
-    // ============================================================
-    //  1. ENCABEZADO: Logo + Datos Empresa + Badge Cotización
-    // ============================================================
+    // 1. ENCABEZADO
     const logoW = 120, logoH = 48;
     try {
-      doc.addImage(LOGO_B64, "PNG", M, y + 2, logoW, logoH);
-    } catch (e) {
-      console.warn("Error agregando logo:", e.message);
-    }
+      if (typeof LOGO_B64 !== "undefined") {
+        doc.addImage(LOGO_B64, "PNG", M, y + 2, logoW, logoH);
+      }
+    } catch (e) {}
 
-    // Datos de la empresa (junto al logo)
     const infoX = M + logoW + 12;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10.5);
@@ -867,12 +1175,11 @@ const PdfBuilder = {
       doc.text(line, infoX, y + 21 + idx * 9.5);
     });
 
-    // Badge Cotización (esquina derecha)
+    // Badge Cotización
     const badgeW = 120;
     const badgeX = pageW - M - badgeW;
     const badgeY = y;
 
-    // Header badge (Navy)
     doc.setFillColor(...navy);
     doc.roundedRect(badgeX, badgeY, badgeW, 20, 3, 3, "F");
     doc.rect(badgeX, badgeY + 16, badgeW, 4, "F");
@@ -881,7 +1188,6 @@ const PdfBuilder = {
     doc.setFontSize(11);
     doc.text("COTIZACIÓN", badgeX + badgeW / 2, badgeY + 14, { align: "center" });
 
-    // Número cotización
     doc.setFillColor(...bgBadge);
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
@@ -889,9 +1195,8 @@ const PdfBuilder = {
     doc.setTextColor(...navy);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10.5);
-    doc.text(String(r.numero || "C-2026-0001"), badgeX + badgeW / 2, badgeY + 34, { align: "center" });
+    doc.text(String(r.numero || "C-2026-1"), badgeX + badgeW / 2, badgeY + 34, { align: "center" });
 
-    // Fecha
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...textMuted);
@@ -899,16 +1204,12 @@ const PdfBuilder = {
 
     y += 66;
 
-    // Línea divisoria azul gruesa del header
     doc.setDrawColor(...navy);
     doc.setLineWidth(2.2);
     doc.line(M, y, pageW - M, y);
-
     y += 8;
 
-    // ============================================================
-    //  2. TAGLINE BANNER
-    // ============================================================
+    // 2. TAGLINE
     doc.setFillColor(...bgBadge);
     doc.roundedRect(M, y, contentW, 18, 3, 3, "F");
     doc.setFont("helvetica", "bold");
@@ -920,12 +1221,9 @@ const PdfBuilder = {
       y + 12,
       { align: "center" }
     );
-
     y += 26;
 
-    // ============================================================
-    //  3. CLIENT INFO PANEL (4 columnas)
-    // ============================================================
+    // 3. CLIENTE
     const clientCells = [
       { label: "CLIENTE", value: r.cliente || "—", w: contentW * 0.38 },
       { label: "NIT", value: r.nit || "—", w: contentW * 0.20 },
@@ -933,24 +1231,18 @@ const PdfBuilder = {
       { label: "CONTACTO", value: r.contacto || "—", w: contentW * 0.22 }
     ];
     y = this.renderPanel(doc, clientCells, M, y, contentW, bgPanel, border, labelKey, textDark);
-
     y += 8;
 
-    // ============================================================
-    //  4. COMMERCIAL TERMS PANEL (3 columnas)
-    // ============================================================
+    // 4. CONDICIONES COMERCIALES
     const termsCells = [
       { label: "TIEMPO DE ENTREGA", value: r.tiempoEntrega || "Inmediata", w: contentW * 0.34 },
       { label: "FORMA DE PAGO", value: r.formaPago || "Contado", w: contentW * 0.33 },
       { label: "VALIDEZ DE LA OFERTA", value: r.validez || "30 días", w: contentW * 0.33 }
     ];
     y = this.renderPanel(doc, termsCells, M, y, contentW, bgPanel, border, labelKey, textDark);
-
     y += 14;
 
-    // ============================================================
-    //  5. TABLA DE PRODUCTOS
-    // ============================================================
+    // 5. TABLA PRODUCTOS
     const cols = [
       { key: "codigo", label: "CÓDIGO", w: 60, align: "center" },
       { key: "descripcion", label: "DESCRIPCIÓN", w: contentW - 60 - 38 - 72 - 42 - 76, align: "left" },
@@ -960,11 +1252,9 @@ const PdfBuilder = {
       { key: "valorTotal", label: "VR. TOTAL", w: 76, align: "right" }
     ];
 
-    // Encabezado de la tabla (Navy)
     doc.setFillColor(...navy);
     doc.roundedRect(M, y, contentW, 20, 3, 3, "F");
     doc.rect(M, y + 15, contentW, 5, "F");
-
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(255, 255, 255);
@@ -979,12 +1269,11 @@ const PdfBuilder = {
     });
     y += 20;
 
-    // Filas de productos
     const items = Array.isArray(r.items) ? r.items : [];
     doc.setLineWidth(0.6);
 
     items.forEach((it, idx) => {
-      const vt = it.cantidad * it.vrUnitario;
+      const vt = (Number(it.cantidad) || 0) * (Number(it.vrUnitario) || 0);
       const isEven = idx % 2 === 1;
 
       doc.setFont("helvetica", "normal");
@@ -1003,28 +1292,22 @@ const PdfBuilder = {
       curX = M;
       doc.setTextColor(...textDark);
 
-      // Código
       doc.text(String(it.codigo || ""), curX + cols[0].w / 2, y + 12, { align: "center" });
       curX += cols[0].w;
 
-      // Descripción
       doc.text(descLines, curX + 6, y + 12);
       curX += cols[1].w;
 
-      // Cantidad
       doc.text(String(it.cantidad || 0), curX + cols[2].w / 2, y + 12, { align: "center" });
       curX += cols[2].w;
 
-      // Vr. Unitario
       doc.text(fmtCOP(it.vrUnitario), curX + cols[3].w - 6, y + 12, { align: "right" });
       curX += cols[3].w;
 
-      // IVA %
       const ivaStr = Math.round((Number(it.ivaPct) || 0) * 100) + "%";
       doc.text(ivaStr, curX + cols[4].w / 2, y + 12, { align: "center" });
       curX += cols[4].w;
 
-      // Vr. Total
       doc.text(fmtCOP(vt), curX + cols[5].w - 6, y + 12, { align: "right" });
 
       y += rowH;
@@ -1032,13 +1315,10 @@ const PdfBuilder = {
 
     y += 8;
 
-    // ============================================================
-    //  6. TOTALES (Caja alineada a la derecha)
-    // ============================================================
+    // 6. TOTALES
     const totW = 195;
     const totX = pageW - M - totW;
 
-    // Subtotal
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...textDark);
@@ -1046,18 +1326,15 @@ const PdfBuilder = {
     doc.text(fmtCOP(r.subtotal), totX + totW - 10, y + 12, { align: "right" });
     y += 16;
 
-    // IVA
     doc.text("IVA:", totX + 10, y + 12);
     doc.text(fmtCOP(r.iva), totX + totW - 10, y + 12, { align: "right" });
     y += 16;
 
-    // Línea separadora antes del Total
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
     doc.line(totX, y, totX + totW, y);
     y += 3;
 
-    // Total final (Navy banner)
     doc.setFillColor(...navy);
     doc.roundedRect(totX, y, totW, 22, 3, 3, "F");
     doc.setTextColor(255, 255, 255);
@@ -1065,12 +1342,9 @@ const PdfBuilder = {
     doc.setFontSize(10.5);
     doc.text("TOTAL:", totX + 12, y + 15);
     doc.text(fmtCOP(r.total), totX + totW - 12, y + 15, { align: "right" });
-
     y += 34;
 
-    // ============================================================
-    //  7. OBSERVACIONES (Izq) + FIRMA (Der)
-    // ============================================================
+    // 7. OBSERVACIONES + FIRMA
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
     const boxTop = y;
@@ -1082,13 +1356,11 @@ const PdfBuilder = {
       "Favor no practicar ReteICA en otros municipios.";
 
     const obsText = (r.observaciones && r.observaciones.trim()) || defaultObs;
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.8);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
     const obsH = Math.max(90, 26 + obsLines.length * 10.5);
 
-    // Caja Observaciones
     doc.setFillColor(...bgPanel);
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
@@ -1104,7 +1376,6 @@ const PdfBuilder = {
     doc.setTextColor(...textDark);
     doc.text(obsLines, M + 10, boxTop + 26);
 
-    // Caja Firma
     const firX = M + obsW + 12;
     doc.setFillColor(...bgPanel);
     doc.setDrawColor(...border);
@@ -1128,9 +1399,7 @@ const PdfBuilder = {
 
     y = boxTop + obsH + 16;
 
-    // ============================================================
-    //  8. FOOTER NOTE
-    // ============================================================
+    // 8. FOOTER
     doc.setDrawColor(...borderSoft);
     doc.setLineWidth(0.6);
     doc.line(M, y, pageW - M, y);
