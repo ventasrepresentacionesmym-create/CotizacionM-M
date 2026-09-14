@@ -324,13 +324,45 @@ const AppInit = {
       const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
       STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
 
-      // 2. Clientes
-      const { data: dbClientes } = await sb.from("clientes").select("nombre, ciudad, nit").order("nombre");
-      STATE.cyp.clientes = (dbClientes && Array.isArray(dbClientes)) ? dbClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit })) : [];
+      // 2. Clientes (paginado para cargar todos los miles de registros)
+      let allClientes = [];
+      let fromC = 0;
+      const stepC = 1000;
+      let hasMoreC = true;
+      while (hasMoreC) {
+        const { data: chunkC, error: errC } = await sb.from("clientes")
+          .select("nombre, ciudad, nit")
+          .order("nombre")
+          .range(fromC, fromC + stepC - 1);
+        if (errC || !chunkC || !chunkC.length) {
+          hasMoreC = false;
+        } else {
+          allClientes.push(...chunkC);
+          if (chunkC.length < stepC) hasMoreC = false;
+          else fromC += stepC;
+        }
+      }
+      STATE.cyp.clientes = allClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
 
-      // 3. Cotizaciones
-      const { data: dbCotizaciones } = await sb.from("cotizaciones").select("*").order("created_at", { ascending: false });
-      STATE.cotizaciones = (dbCotizaciones && Array.isArray(dbCotizaciones)) ? dbCotizaciones.map(c => ({
+      // 3. Cotizaciones (paginado)
+      let allCotizaciones = [];
+      let fromCot = 0;
+      const stepCot = 1000;
+      let hasMoreCot = true;
+      while (hasMoreCot) {
+        const { data: chunkCot, error: errCot } = await sb.from("cotizaciones")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(fromCot, fromCot + stepCot - 1);
+        if (errCot || !chunkCot || !chunkCot.length) {
+          hasMoreCot = false;
+        } else {
+          allCotizaciones.push(...chunkCot);
+          if (chunkCot.length < stepCot) hasMoreCot = false;
+          else fromCot += stepCot;
+        }
+      }
+      STATE.cotizaciones = allCotizaciones.map(c => ({
         numero: c.numero,
         fecha: c.fecha,
         cliente: c.cliente_nombre,
@@ -346,7 +378,7 @@ const AppInit = {
         iva: Number(c.iva) || 0,
         total: Number(c.total) || 0,
         items: c.items || []
-      })) : [];
+      }));
 
       // 4. Productos
       let allProducts = [];
