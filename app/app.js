@@ -692,31 +692,15 @@ Views.renderNueva = function (numeroToLoad) {
       <div class="grid g3" style="margin-top:14px">
         <div>
           <label>Tiempo de entrega</label>
-          <div class="combo-wrapper">
-            <input id="f_tiempo" list="opciones_tiempo" value="${esc(source ? source.tiempoEntrega || "Inmediata" : "Inmediata")}" placeholder="Selecciona o escribe..." autocomplete="off">
-            <div class="combo-arrow" onclick="document.getElementById('f_tiempo').focus();">▼</div>
-            <datalist id="opciones_tiempo">
-              <option value="Inmediata">
-              <option value="De 3 a 5 días hábiles">
-              <option value="De 8 a 15 días hábiles">
-              <option value="De 15 a 20 días hábiles">
-              <option value="De 20 a 30 días hábiles">
-            </datalist>
-          </div>
+          <select id="f_tiempo">
+            ${["Inmediata","De 3 a 5 días hábiles","De 8 a 15 días hábiles","De 15 a 20 días hábiles","De 20 a 30 días hábiles"].map(o=>`<option value="${esc(o)}" ${(source?source.tiempoEntrega||"Inmediata":"Inmediata")===o?"selected":""}>${esc(o)}</option>`).join("")}
+          </select>
         </div>
         <div>
           <label>Forma de pago</label>
-          <div class="combo-wrapper">
-            <input id="f_pago" list="opciones_pago" value="${esc(source ? source.formaPago || "Contado" : "Contado")}" placeholder="Selecciona o escribe..." autocomplete="off">
-            <div class="combo-arrow" onclick="document.getElementById('f_pago').focus();">▼</div>
-            <datalist id="opciones_pago">
-              <option value="Contado">
-              <option value="Crédito 15 días">
-              <option value="Crédito 30 días">
-              <option value="Crédito 60 días">
-              <option value="50% Anticipo, 50% Contraentrega">
-            </datalist>
-          </div>
+          <select id="f_pago">
+            ${["Contado","Crédito 15 días","Crédito 30 días","Crédito 60 días","50% Anticipo, 50% Contraentrega"].map(o=>`<option value="${esc(o)}" ${(source?source.formaPago||"Contado":"Contado")===o?"selected":""}>${esc(o)}</option>`).join("")}
+          </select>
         </div>
         <div><label>Validez de la oferta</label><input id="f_validez" value="${esc(source ? source.validez || "15 días" : "15 días")}"></div>
       </div>
