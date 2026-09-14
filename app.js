@@ -17,6 +17,130 @@ function getSb() {
   return sbClient;
 }
 
+/* ============================================================
+   FOLDER SAVER — Guarda PDFs en carpeta local via File System Access API
+   - Primera vez: muestra selector de carpeta
+   - Siguientes veces: guarda directo sin preguntar
+   - Fallback: descarga normal si el navegador no soporta la API
+   ============================================================ */
+const FolderSaver = {
+  DB_NAME: "CotizadorFS",
+  DB_STORE: "handles",
+  DB_KEY: "pdfFolder",
+
+  // Abre (o crea) la base IndexedDB donde guardamos el handle de la carpeta
+  _openIDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(this.DB_NAME, 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(this.DB_STORE);
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror = e => reject(e.target.error);
+    });
+  },
+
+  async _getHandle() {
+    try {
+      const db = await this._openIDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.DB_STORE, "readonly");
+        const req = tx.objectStore(this.DB_STORE).get(this.DB_KEY);
+        req.onsuccess = e => resolve(e.target.result || null);
+        req.onerror = e => reject(e.target.error);
+      });
+    } catch { return null; }
+  },
+
+  async _saveHandle(handle) {
+    try {
+      const db = await this._openIDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.DB_STORE, "readwrite");
+        const req = tx.objectStore(this.DB_STORE).put(handle, this.DB_KEY);
+        req.onsuccess = () => resolve();
+        req.onerror = e => reject(e.target.error);
+      });
+    } catch { /* silencioso */ }
+  },
+
+  // Verifica que el permiso sigue vigente; si no, lo re-solicita
+  async _verifyPermission(handle) {
+    const opts = { writable: true };
+    if ((await handle.queryPermission(opts)) === "granted") return true;
+    if ((await handle.requestPermission(opts)) === "granted") return true;
+    return false;
+  },
+
+  // API pública: guarda el blob en la carpeta elegida
+  // Retorna true si guardó en carpeta, false si usó descarga normal
+  async saveBlob(blob, filename) {
+    // Si el navegador no soporta la API → descarga normal
+    if (!("showDirectoryPicker" in window)) {
+      this._fallbackDownload(blob, filename);
+      return false;
+    }
+
+    let dirHandle = await this._getHandle();
+
+    // Si no hay carpeta guardada o el permiso venció → pedir carpeta
+    if (!dirHandle || !(await this._verifyPermission(dirHandle))) {
+      try {
+        dirHandle = await window.showDirectoryPicker({
+          id: "cotizaciones-pdf",
+          mode: "readwrite",
+          startIn: "documents"
+        });
+        await this._saveHandle(dirHandle);
+      } catch (err) {
+        // Usuario canceló el selector → descarga normal
+        this._fallbackDownload(blob, filename);
+        return false;
+      }
+    }
+
+    // Escribir el archivo en la carpeta
+    try {
+      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (e) {
+      console.warn("Error escribiendo en carpeta:", e);
+      this._fallbackDownload(blob, filename);
+      return false;
+    }
+  },
+
+  _fallbackDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  },
+
+  // Permite al usuario cambiar la carpeta guardada
+  async changeFolder() {
+    if (!("showDirectoryPicker" in window)) {
+      return toast("Tu navegador no soporta esta función. Usa Chrome o Edge.", true);
+    }
+    try {
+      const dirHandle = await window.showDirectoryPicker({
+        id: "cotizaciones-pdf",
+        mode: "readwrite",
+        startIn: "documents"
+      });
+      await this._saveHandle(dirHandle);
+      toast(`✅ Carpeta configurada: ${dirHandle.name}`);
+    } catch { /* cancelado */ }
+  }
+};
+window.FolderSaver = FolderSaver;
+
+
 let STATE = {
   datos: [],
   cyp: { clientes: [], asesores: [] },
@@ -1084,6 +1208,7 @@ const Cotizador = {
 
     const filename = `Cotizacion_${record.numero}.pdf`;
 
+    // Subir a Supabase Storage (acceso compartido todos los usuarios)
     const sb = getSb();
     if (sb) {
       try {
@@ -1093,15 +1218,13 @@ const Cotizador = {
       }
     }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `Cotizacion ${record.numero}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-    toast(`PDF de cotización ${record.numero} descargado`);
+    // Guardar en carpeta local (File System Access API) o descarga normal
+    const savedToFolder = await FolderSaver.saveBlob(blob, filename);
+    if (savedToFolder) {
+      toast(`✅ PDF guardado en tu carpeta configurada`);
+    } else {
+      toast(`PDF de cotización ${record.numero} descargado`);
+    }
   }
 };
 
