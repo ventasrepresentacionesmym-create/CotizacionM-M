@@ -437,6 +437,11 @@ function esc(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Normaliza texto: minúsculas y sin tildes, para búsquedas tolerantes a acentos
+function norm(s) {
+  return String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 function formatFechaHora(isoStr) {
   if (!isoStr) return "Sin registros previos";
   try {
@@ -492,7 +497,7 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
   function close() { listEl.classList.remove("show"); listEl.innerHTML = ""; hi = -1; }
 
   inputEl.addEventListener("input", () => {
-    const q = inputEl.value.trim().toLowerCase();
+    const q = norm(inputEl.value);
     items = q ? getItems(q).slice(0, 40) : [];
     if (!items.length) return close();
     listEl.innerHTML = items.map((it, i) => `<div class="${itemClass}" data-i="${i}">${renderItem(it)}</div>`).join("");
@@ -536,15 +541,15 @@ function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
   let hi = -1;
 
   function render(filter = "") {
-    const q = filter.trim().toLowerCase();
-    const filtered = q ? options.filter(o => o.toLowerCase().includes(q)) : options;
-    const currentVal = inputEl.value.trim();
+    const q = norm(filter);
+    const filtered = q ? options.filter(o => norm(o).includes(q)) : options;
+    const currentVal = norm(inputEl.value);
 
     if (!filtered.length) {
       dropdownEl.innerHTML = `<div style="padding:10px 14px;font-size:12.5px;color:var(--texto-suave);text-align:center">No hay coincidencias (puedes escribir texto libre)</div>`;
     } else {
       dropdownEl.innerHTML = filtered.map((opt, i) => {
-        const isSelected = opt.toLowerCase() === currentVal.toLowerCase();
+        const isSelected = norm(opt) === currentVal;
         return `
           <div class="combo-option ${isSelected ? "selected" : ""}" data-i="${i}" data-val="${esc(opt)}">
             <span>${esc(opt)}</span>
@@ -1080,7 +1085,7 @@ Views.renderAsesores = function () {
       if (!nuevo) return toast("El nombre no puede quedar vacío", true);
       const asesoresActuales = [...getAsesoresList()];
       const antiguo = asesoresActuales[i];
-      if (asesoresActuales.some((a, j) => j !== i && a.toLowerCase() === nuevo.toLowerCase())) {
+      if (asesoresActuales.some((a, j) => j !== i && norm(a) === norm(nuevo))) {
         return toast("Ya existe un asesor con ese nombre", true);
       }
       asesoresActuales[i] = nuevo;
@@ -1131,7 +1136,7 @@ Views.renderAsesores = function () {
     const nombre = addInput.value.trim();
     if (!nombre) return toast("Escribe el nombre del asesor", true);
     const asesoresActuales = [...getAsesoresList()];
-    if (asesoresActuales.some(a => a.toLowerCase() === nombre.toLowerCase())) {
+    if (asesoresActuales.some(a => norm(a) === norm(nombre))) {
       return toast("Ese asesor ya existe", true);
     }
     asesoresActuales.push(nombre);
@@ -1185,14 +1190,12 @@ Views.renderGuardadas = function () {
     if (!list) return;
 
     let cots = DB.getCotizaciones().slice();
-    const q = currentSearch.trim().toLowerCase();
-
-    // Filtro por N.°, Cliente o Asesor
+    const q = norm(currentSearch);
     if (q) {
       cots = cots.filter(c =>
-        (c.numero || "").toLowerCase().includes(q) ||
-        (c.cliente || "").toLowerCase().includes(q) ||
-        (c.asesor || "").toLowerCase().includes(q)
+        (c.numero && norm(c.numero).includes(q)) ||
+        (c.cliente && norm(c.cliente).includes(q)) ||
+        (c.asesor && norm(c.asesor).includes(q))
       );
     }
 
@@ -1392,7 +1395,7 @@ Views.renderNueva = function (numeroToLoad) {
 
   attachAutocomplete(
     document.getElementById("f_cliente"), document.getElementById("ac_cliente"),
-    q => DB.getCYP().clientes.filter(c => (c.cliente && c.cliente.toLowerCase().includes(q)) || (c.nit && c.nit.toLowerCase().includes(q))),
+    q => DB.getCYP().clientes.filter(c => (c.cliente && norm(c.cliente).includes(q)) || (c.nit && norm(c.nit).includes(q))),
     c => `<div class="c1">${esc(c.cliente)}</div><div class="c2">${esc(c.nit || "")} · ${esc(c.ciudad || "")}</div>`,
     c => {
       document.getElementById("f_cliente").value = c.cliente;
@@ -1498,7 +1501,7 @@ ItemsUI.paint = function () {
 
     const getProducts = q => {
       const datos = DB.getDatos();
-      return datos.filter(d => (d[0] && String(d[0]).toLowerCase().includes(q)) || (d[1] && String(d[1]).toLowerCase().includes(q)));
+      return datos.filter(d => (d[0] && norm(d[0]).includes(q)) || (d[1] && norm(d[1]).includes(q)));
     };
 
     if (codInput && acCodList) attachAutocomplete(codInput, acCodList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");

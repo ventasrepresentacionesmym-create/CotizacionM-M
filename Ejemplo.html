@@ -1,416 +1,300 @@
-/* ============================================================
-   COTIZADOR M&M MEDICAL — Versión Cloud (GitHub + Supabase + Vercel)
-   ============================================================ */
-
-const SUPABASE_URL = "https://stljwvpwozeagnbzqkeh.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0bGp3dnB3b3plYWduYnpxa2VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNzMyNDIsImV4cCI6MjEwNDk0OTI0Mn0.sxDOIrsFbfKlUS3Sz5pLDgOAP7trVLL4OzKiXqgpNxI";
-
-var sbClient = null;
-function getSb() {
-  if (!sbClient && window.supabase && window.supabase.createClient) {
-    try {
-      sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    } catch (e) {
-      console.warn("Error inicializando cliente de Supabase:", e);
-    }
-  }
-  return sbClient;
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulación · Sistema de Cotizaciones M&M Medical</title>
+<!-- jsPDF cargado desde CDN para que la simulación también descargue el PDF -->
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<style>
+:root{
+  --teal-900:#0b3d4b;
+  --teal-800:#0e5468;
+  --teal-700:#0f7a8a;
+  --teal-600:#159aab;
+  --teal-500:#1fb6c4;
+  --azul-950:#1B3A6B;
+  --azul-800:#244c8c;
+  --lima:#8dc63f;
+  --papel:#f8fafc;
+  --tarjeta:#ffffff;
+  --linea:#e2e8f0;
+  --texto:#1e293b;
+  --texto-suave:#64748b;
+  --radio:10px;
+  --sombra:0 1px 3px rgba(0,0,0,.04), 0 6px 16px -6px rgba(27,58,107,.08);
+  --mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+  --sans:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
 }
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--papel);color:var(--texto);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+body{min-height:100vh;}
+a{color:inherit;}
+button{font-family:inherit;}
 
+.app-shell{max-width:1080px;margin:0 auto;padding:24px 28px 70px;}
+.app-shell.wide-nueva{max-width:1320px;}
+
+.topbar{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:8px 0 20px;flex-wrap:wrap;}
+.top-btn{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--azul-950);background:#fff;border:1px solid var(--linea);padding:8px 16px;border-radius:20px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:all .15s ease;}
+.top-btn:hover{border-color:var(--azul-800);background:#f8fafc;}
+
+.view{display:none;}
+.view.active{display:block;animation:fade .2s ease;}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+.home-wrap{display:flex;flex-direction:column;align-items:center;padding:50px 0 20px;text-align:center;}
+.home-logo{height:105px;object-fit:contain;margin-bottom:44px;}
+.menu-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;width:100%;max-width:580px;}
+.home-card{display:flex;align-items:center;justify-content:center;gap:14px;background:#ffffff;border:1px solid var(--linea);border-radius:var(--radio);padding:22px 24px;cursor:pointer;box-shadow:var(--sombra);transition:all .15s ease;text-align:center;}
+.home-card:hover{border-color:var(--azul-950);transform:translateY(-2px);box-shadow:0 6px 20px rgba(27,58,107,.1);}
+.home-card-icon{width:38px;height:38px;border-radius:8px;background:#f0f7fa;color:var(--teal-700);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s ease;}
+.home-card:hover .home-card-icon{background:var(--azul-950);color:#ffffff;}
+.home-card-title{font-size:15.5px;font-weight:700;color:var(--azul-950);letter-spacing:-.1px;}
+@media(max-width:600px){.menu-grid{grid-template-columns:1fr;}}
+
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
+.section-head h2{font-size:20px;margin:0;color:var(--azul-950);font-weight:700;letter-spacing:-.2px;}
+.back{font-size:13px;color:var(--teal-700);cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;}
+.back:hover{text-decoration:underline;}
+.card{background:var(--tarjeta);border:1px solid var(--linea);border-radius:var(--radio);box-shadow:0 1px 3px rgba(0,0,0,.04);padding:22px;margin-bottom:18px;}
+.grid{display:grid;gap:14px;}
+.g2{grid-template-columns:1fr 1fr;}
+.g3{grid-template-columns:1fr 1fr 1fr;}
+.g4{grid-template-columns:1fr 1fr 1fr 1fr;}
+@media(max-width:760px){.g2,.g3,.g4{grid-template-columns:1fr;}}
+
+label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--texto-suave);margin-bottom:5px;}
+input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--linea);border-radius:6px;font-size:13.5px;font-family:inherit;background:#fff;color:var(--texto);transition:.15s;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--teal-600);box-shadow:0 0 0 3px rgba(21,154,171,.12);}
+input.err,select.err{border-color:#c0442c;box-shadow:0 0 0 3px rgba(192,68,44,.12);}
+textarea{resize:vertical;min-height:90px;}
+.field{position:relative;}
+
+.combo-field{position:relative;width:100%;}
+.combo-field input{padding-right:34px;cursor:pointer;}
+.combo-field input:focus{cursor:text;}
+.combo-arrow-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:var(--texto-suave);cursor:pointer;transition:all .15s ease;user-select:none;}
+.combo-arrow-btn:hover{background:#f1f5f9;color:var(--azul-950);}
+.combo-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;z-index:1000;display:none;padding:4px 0;}
+.combo-dropdown.show{display:block;animation:fade .15s ease;}
+.combo-option{padding:9px 13px;font-size:13px;color:var(--texto);cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:background .12s;}
+.combo-option:hover,.combo-option.hi{background:#f0f9fa;color:var(--azul-950);font-weight:600;}
+.combo-option.selected{background:#e6f6f8;color:var(--teal-800);font-weight:700;}
+
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid transparent;cursor:pointer;transition:all .15s ease;}
+.btn-primary{background:var(--azul-950);color:#fff;}
+.btn-primary:hover{background:var(--azul-800);}
+.btn-accent{background:var(--teal-700);color:#fff;}
+.btn-accent:hover{background:var(--teal-800);}
+.btn-ghost{background:#fff;border-color:var(--linea);color:var(--texto);}
+.btn-ghost:hover{border-color:var(--teal-600);color:var(--teal-700);}
+.btn-danger{background:#fff;border-color:#fecaca;color:#dc2626;}
+.btn-danger:hover{background:#fef2f2;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;}
+
+.ac-wrap{position:relative;width:100%;}
+.ac-list{position:absolute;top:calc(100% + 4px);left:0;background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.1);max-height:280px;overflow-y:auto;z-index:1000;display:none;width:100%;}
+.ac-list.show{display:block;}
+.ac-list.ac-products{width:560px;max-width:90vw;}
+.ac-item{padding:9px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid #f1f5f9;transition:background .12s;}
+.ac-item:last-child{border-bottom:none;}
+.ac-item:hover,.ac-item.hi{background:#f0f9ff;}
+.ac-item .c1{font-weight:700;color:var(--azul-950);}
+.ac-item .c2{color:var(--texto-suave);font-size:11.5px;}
+
+.ac-prod-card{padding:10px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;display:flex;flex-direction:column;gap:4px;transition:background .12s;}
+.ac-prod-card:last-child{border-bottom:none;}
+.ac-prod-card:hover,.ac-prod-card.hi{background:#f0f9ff;}
+.ac-prod-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.ac-badge-code{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--azul-950);background:#f1f5f9;padding:2px 8px;border-radius:4px;border:1px solid #e2e8f0;}
+.ac-badge-iva{font-size:11px;font-weight:700;color:var(--teal-700);background:#f0fdf4;padding:2px 7px;border-radius:4px;}
+.ac-badge-costo{font-family:var(--mono);font-size:11.5px;color:var(--texto-suave);font-weight:600;}
+.ac-prod-name{font-size:13px;font-weight:600;color:var(--texto);line-height:1.35;}
+.ac-prod-prov{font-size:11px;color:var(--texto-suave);}
+
+.items-table-wrap{overflow:visible;position:relative;width:100%;}
+.items-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}
+.items-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--azul-950);font-weight:700;border-bottom:2px solid var(--linea);padding:10px 6px;background:#f8fafc;}
+.items-table td{padding:7px 5px;border-bottom:1px solid #f1f5f9;vertical-align:middle;position:relative;}
+.items-table input{padding:7px 8px;font-size:12.5px;width:100%;box-sizing:border-box;}
+.items-table .num{text-align:right;font-family:var(--mono);font-weight:600;color:var(--azul-950);font-size:12.5px;}
+.items-table .rm{background:none;border:none;color:var(--texto-suave);cursor:pointer;font-size:16px;padding:5px 7px;border-radius:6px;transition:.15s;}
+.items-table .rm:hover{background:#fef2f2;color:#dc2626;}
+.col-cod{width:11%;}.col-desc{width:29%;}.col-cant{width:6%;}.col-vu{width:10%;}.col-iva{width:6%;}.col-vi{width:9%;}.col-vt{width:10%;}.col-util{width:6%;}.col-costo{width:9%;}.col-prov{width:9%;}.col-rm{width:3.5%;text-align:center;}
+
+.totals{display:flex;justify-content:flex-end;margin-top:14px;}
+.totals table{font-size:14px;}
+.totals td{padding:4px 10px;}
+.totals td:first-child{color:var(--texto-suave);text-align:right;}
+.totals td:last-child{font-family:var(--mono);text-align:right;min-width:120px;font-weight:600;}
+.totals tr.total td{font-size:17px;font-weight:800;color:var(--azul-950);border-top:2px solid var(--linea);padding-top:8px;}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--azul-950);color:#fff;padding:11px 18px;border-radius:8px;font-size:13px;box-shadow:0 10px 25px rgba(0,0,0,.15);opacity:0;pointer-events:none;transition:.2s ease;z-index:1000;}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+.toast.error{background:#dc2626;}
+
+.list-row{display:grid;grid-template-columns:110px 1fr 130px 150px 110px;gap:10px;align-items:center;padding:12px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;cursor:pointer;}
+.list-row:hover{background:#f8fafc;}
+.list-row.head{cursor:default;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--texto-suave);font-weight:700;user-select:none;background:#f8fafc;border-radius:6px;}
+.list-row.head:hover{background:#f8fafc;}
+.list-row.head span{cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:color .12s;}
+.list-row.head span:hover{color:var(--azul-950);}
+.list-row.head span.sorted{color:var(--azul-950);font-weight:800;}
+.list-row .n{font-family:var(--mono);font-weight:700;color:var(--teal-700);}
+@media(max-width:760px){.list-row{grid-template-columns:1fr 1fr;}.list-row span:nth-child(3),.list-row span:nth-child(5){display:none;}}
+
+.search-bar{display:flex;gap:10px;margin-bottom:14px;}
+.search-bar input{flex:1;}
+.empty{text-align:center;padding:50px 20px;color:var(--texto-suave);}
+.empty .ic{font-size:34px;margin-bottom:10px;}
+
+.cloud-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--teal-800);background:#f0fdf4;padding:4px 10px;border-radius:15px;border:1px solid #bbf7d0;}
+.cloud-dot{width:6px;height:6px;border-radius:50%;background:#16a34a;}
+
+.data-summary-box{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:14px;}
+.data-metric{background:#f8fafc;border:1px solid var(--linea);border-radius:8px;padding:16px;text-align:center;}
+.data-metric-val{font-size:24px;font-weight:800;color:var(--azul-950);margin-bottom:4px;font-family:var(--mono);}
+.data-metric-lbl{font-size:12px;font-weight:600;color:var(--texto-suave);text-transform:uppercase;letter-spacing:.04em;}
+@media(max-width:640px){.data-summary-box{grid-template-columns:1fr;}}
+
+.sync-card{margin-top:20px;padding:18px 20px;background:#f8fafc;border-radius:10px;border:1px solid var(--linea);}
+.sync-title{font-size:15px;font-weight:700;color:var(--azul-950);display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}
+.sync-desc{font-size:13px;color:var(--texto-suave);line-height:1.5;margin-bottom:16px;}
+.sync-folder-info{display:inline-flex;align-items:center;gap:6px;background:#e0f2fe;color:#0369a1;font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid #bae6fd;}
+.sync-progress-wrap{margin-top:14px;background:#e2e8f0;border-radius:8px;height:10px;overflow:hidden;position:relative;display:none;}
+.sync-progress-bar{height:100%;background:linear-gradient(90deg,var(--teal-600),var(--teal-500));width:0%;transition:width .2s ease;border-radius:8px;}
+.sync-status-msg{margin-top:10px;font-size:12.5px;font-weight:600;color:var(--azul-950);display:none;}
+.sync-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;}
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <div class="topbar" id="topbar">
+    <span class="cloud-badge" id="cloudStatus"><span class="cloud-dot"></span> Simulación</span>
+    <button class="top-btn" onclick="toast('Simulación: botón Carpeta PDF (solo disponible en la app real)')" title="Configurar carpeta donde se guardan los PDFs">📁 Carpeta PDF</button>
+    <button class="top-btn" onclick="Router.go('actualizar-excel')">📊 Actualizar Datos</button>
+    <button class="top-btn" onclick="Router.go('asesores')">👤 Asesores</button>
+  </div>
+
+  <div class="view active" id="view-home">
+    <div class="home-wrap">
+      <img class="home-logo" src="assets/logo.png" alt="Representaciones M&M Medical">
+      <div class="menu-grid">
+        <div class="home-card" onclick="Router.go('nueva')">
+          <div class="home-card-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          </div>
+          <div class="home-card-title">Nueva cotización</div>
+        </div>
+        <div class="home-card" onclick="Router.go('guardadas')">
+          <div class="home-card-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <div class="home-card-title">Cotizaciones guardadas</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-nueva"></div>
+  <div class="view" id="view-guardadas"></div>
+  <div class="view" id="view-asesores"></div>
+  <div class="view" id="view-actualizar-excel"></div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
 /* ============================================================
-   FOLDER SAVER — Guarda PDFs en carpeta local via File System Access API
-   - Primera vez: muestra selector de carpeta
-   - Siguientes veces: guarda directo sin preguntar
-   - Fallback: descarga normal si el navegador no soporta la API
+   SIMULACIÓN — Datos de ejemplo
    ============================================================ */
-/* ============================================================
-   FOLDER SAVER — Guarda PDFs en carpeta local via File System Access API
-   - Primera vez: muestra selector de carpeta
-   - Siguientes veces: guarda directo sin preguntar
-   - Fallback: descarga normal si el navegador no soporta la API
-   ============================================================ */
-const FolderSaver = {
-  DB_NAME: "CotizadorFS",
-  DB_STORE: "handles",
-  DB_KEY: "pdfFolder",
+const MOCK_PROD = [
+  ["GUA-029", "Guante de examen de nitrilo sin polvo talla M caja x100", 0.19, 120, 14500, "3M Colombia SAS"],
+  ["GUA-030", "Guante de examen de nitrilo sin polvo talla L caja x100", 0.19, 95, 15200, "3M Colombia SAS"],
+  ["JER-010", "Jeringa desechable 10cc con aguja 21G x1", 0.19, 800, 380, "BD Medical"],
+  ["JER-005", "Jeringa desechable 5cc con aguja 22G x1", 0.19, 1200, 260, "BD Medical"],
+  ["SON-18", "Sonda vesical Foley 2 vías silicona 18Fr x1", 0.19, 60, 9500, "Romed"],
+  ["CAT-22", "Catéter intravenoso 22G x1", 0.19, 340, 1450, "BBraun"],
+  ["SUT-30", "Sutura Polipropileno 3-0 aguja c/c 12 unidades", 0, 25, 38000, "Johnson & Johnson"],
+  ["TAP-45", "Tapabocas quirúrgico caja x50", 0.19, 200, 3200, "Fibras y Textiles"],
+  ["GAZ-10", "Gasa estéril 10x10cm paquete x100", 0.19, 150, 6800, "Colombian Gases"],
+  ["TER-36", "Termómetro digital pediátrico x1", 0, 40, 12500, "Omron"]
+];
 
-  // Abre (o crea) la base IndexedDB donde guardamos los handles de carpetas
-  _openIDB() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.DB_NAME, 1);
-      req.onupgradeneeded = e => e.target.result.createObjectStore(this.DB_STORE);
-      req.onsuccess = e => resolve(e.target.result);
-      req.onerror = e => reject(e.target.error);
-    });
-  },
+const MOCK_CLIENTES = [
+  { cliente: "Clínica Bucaramanga S.A.", ciudad: "Bucaramanga", nit: "890123456-7" },
+  { cliente: "Hospital Universitario de Santander", ciudad: "Floridablanca", nit: "890201120-1" },
+  { cliente: "IPS Salud Vital", ciudad: "Girón", nit: "900234567-1" },
+  { cliente: "Centro Médico La Aurora", ciudad: "Bucaramanga", nit: "900301234-5" },
+  { cliente: "Droguerías Farma Norte", ciudad: "Cúcuta", nit: "890511234-3" },
+  { cliente: "E.S.E. Hospital San Rafael", ciudad: "Piedecuesta", nit: "890204567-8" }
+];
 
-  async _getGenericHandle(key) {
-    try {
-      const db = await this._openIDB();
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(this.DB_STORE, "readonly");
-        const req = tx.objectStore(this.DB_STORE).get(key);
-        req.onsuccess = e => resolve(e.target.result || null);
-        req.onerror = e => reject(e.target.error);
-      });
-    } catch { return null; }
-  },
+const MOCK_ASESORES = ["Andrea Rodríguez", "Carlos Gómez", "Laura Peña"];
 
-  async _saveGenericHandle(key, handle) {
-    try {
-      const db = await this._openIDB();
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(this.DB_STORE, "readwrite");
-        const req = tx.objectStore(this.DB_STORE).put(handle, key);
-        req.onsuccess = () => resolve();
-        req.onerror = e => reject(e.target.error);
-      });
-    } catch { /* silencioso */ }
-  },
+const HOY = new Date().toISOString().slice(0, 10);
+let lastNum = 3;
 
-  async _getHandle() {
-    return await this._getGenericHandle(this.DB_KEY);
-  },
-
-  async _saveHandle(handle) {
-    return await this._saveGenericHandle(this.DB_KEY, handle);
-  },
-
-  // Verifica que el permiso sigue vigente; si no, lo re-solicita
-  async _verifyPermission(handle, mode = "readwrite") {
-    try {
-      const opts = { mode };
-      if ((await handle.queryPermission(opts)) === "granted") return true;
-      if ((await handle.requestPermission(opts)) === "granted") return true;
-      return false;
-    } catch {
-      return false;
+const STATE = {
+  datos: MOCK_PROD.map(p => p),
+  cyp: { clientes: MOCK_CLIENTES.map(c => ({ cliente: c.cliente, ciudad: c.ciudad, nit: c.nit })), asesores: MOCK_ASESORES.slice() },
+  cotizaciones: [
+    {
+      numero: "C-" + new Date().getFullYear() + "-3",
+      fecha: HOY, cliente: "Clínica Bucaramanga S.A.", nit: "890123456-7", ciudad: "Bucaramanga",
+      contacto: "Dra. Mariana Prada", asesor: "Andrea Rodríguez", tiempoEntrega: "De 3 a 5 días hábiles",
+      formaPago: "Credito", validez: "15 días",
+      observaciones: "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\nNo somos grandes contribuyentes ni autorretenedores de renta.\n\nSomos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.",
+      subtotal: 1910000, iva: 363090, total: 2273090,
+      items: [
+        { codigo: "GUA-029", descripcion: "Guante de examen de nitrilo sin polvo talla M caja x100", cantidad: 100, vrUnitario: 17500, ivaPct: 0.19, costo: 14500, porcentaje: 0.21, proveedor: "3M Colombia SAS" },
+        { codigo: "JER-010", descripcion: "Jeringa desechable 10cc con aguja 21G x1", cantidad: 200, vrUnitario: 800, ivaPct: 0.19, costo: 380, porcentaje: 1.10, proveedor: "BD Medical" }
+      ]
+    },
+    {
+      numero: "C-" + new Date().getFullYear() + "-2",
+      fecha: HOY, cliente: "Hospital Universitario de Santander", nit: "890201120-1", ciudad: "Floridablanca",
+      contacto: "Ing. Felipe Rojas", asesor: "Carlos Gómez", tiempoEntrega: "De 6 a 10 días hábiles",
+      formaPago: "Contado", validez: "30 días",
+      observaciones: "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\nNo somos grandes contribuyentes ni autorretenedores de renta.",
+      subtotal: 380000, iva: 0, total: 380000,
+      items: [
+        { codigo: "SUT-30", descripcion: "Sutura Polipropileno 3-0 aguja c/c 12 unidades", cantidad: 10, vrUnitario: 38000, ivaPct: 0, costo: 38000, porcentaje: 0, proveedor: "Johnson & Johnson" }
+      ]
+    },
+    {
+      numero: "C-" + new Date().getFullYear() + "-1",
+      fecha: HOY, cliente: "IPS Salud Vital", nit: "900234567-1", ciudad: "Girón",
+      contacto: "Sra. Ana Sofía López", asesor: "Laura Peña", tiempoEntrega: "Inmediata",
+      formaPago: "50% Anticipo, 50% Contraentrega", validez: "15 días",
+      observaciones: "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.",
+      subtotal: 760000, iva: 144400, total: 904400,
+      items: [
+        { codigo: "SON-18", descripcion: "Sonda vesical Foley 2 vías silicona 18Fr x1", cantidad: 80, vrUnitario: 9500, ivaPct: 0.19, costo: 9500, porcentaje: 0, proveedor: "Romed" }
+      ]
     }
-  },
-
-  // API pública: guarda el blob en la carpeta elegida
-  // Retorna true si guardó en carpeta, false si usó descarga normal
-  async saveBlob(blob, filename) {
-    // Si el navegador no soporta la API → descarga normal
-    if (!("showDirectoryPicker" in window)) {
-      this._fallbackDownload(blob, filename);
-      return false;
-    }
-
-    let dirHandle = await this._getHandle();
-
-    // Si no hay carpeta guardada o el permiso venció → pedir carpeta
-    if (!dirHandle || !(await this._verifyPermission(dirHandle, "readwrite"))) {
-      try {
-        dirHandle = await window.showDirectoryPicker({
-          id: "cotizaciones-pdf",
-          mode: "readwrite",
-          startIn: "documents"
-        });
-        await this._saveHandle(dirHandle);
-      } catch (err) {
-        // Usuario canceló el selector → descarga normal
-        this._fallbackDownload(blob, filename);
-        return false;
-      }
-    }
-
-    // Escribir el archivo en la carpeta
-    try {
-      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return true;
-    } catch (e) {
-      console.warn("Error escribiendo en carpeta:", e);
-      this._fallbackDownload(blob, filename);
-      return false;
-    }
-  },
-
-  _fallbackDownload(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-  },
-
-  // Permite al usuario cambiar la carpeta guardada
-  async changeFolder() {
-    if (!("showDirectoryPicker" in window)) {
-      return toast("Tu navegador no soporta esta función. Usa Chrome o Edge.", true);
-    }
-    try {
-      const dirHandle = await window.showDirectoryPicker({
-        id: "cotizaciones-pdf",
-        mode: "readwrite",
-        startIn: "documents"
-      });
-      await this._saveHandle(dirHandle);
-      toast(`✅ Carpeta PDF configurada: ${dirHandle.name}`);
-    } catch { /* cancelado */ }
-  }
+  ]
 };
-window.FolderSaver = FolderSaver;
-
-/* ============================================================
-   DATA SYNC — Sincronización desde Carpeta Dropbox o Archivos Locales
-   ============================================================ */
-const DataSync = {
-  DB_KEY: "dataFolder",
-
-  async getSavedFolder() {
-    return await FolderSaver._getGenericHandle(this.DB_KEY);
-  },
-
-  async setSavedFolder(handle) {
-    return await FolderSaver._saveGenericHandle(this.DB_KEY, handle);
-  },
-
-  async pickFolder() {
-    if (!("showDirectoryPicker" in window)) {
-      throw new Error("Tu navegador no soporta seleccionar carpetas directamente. Usa el selector de archivos manual.");
-    }
-    const handle = await window.showDirectoryPicker({
-      id: "cotizaciones-datos",
-      mode: "read",
-      startIn: "documents"
-    });
-    await this.setSavedFolder(handle);
-    return handle;
-  },
-
-  parseHtmlRows(html) {
-    const trBlocks = html.split(/<tr[^>]*>/i);
-    const result = [];
-    for (let b = 1; b < trBlocks.length; b++) {
-      const block = trBlocks[b];
-      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<td|$)/gi)];
-      if (!tdMatches.length) continue;
-      result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
-    }
-    return result;
-  },
-
-  parseProductos(html) {
-    const rows = this.parseHtmlRows(html);
-    const mapProd = new Map();
-    for (const cells of rows) {
-      if (cells.length < 13) continue;
-      const colA = cells[0], colB = cells[1], colD = cells[3], colM = cells[12];
-      if (!colB || /^TOTAL/i.test(colA) || /TOTAL/i.test(colB)) continue;
-      if (!colA.includes("|")) continue;
-      const codigo = colA.split("|")[0].trim();
-      if (!codigo) continue;
-      const ivaPct = (colD && (colD.startsWith("B") || colD.includes("19"))) ? 0.19 : 0;
-      const costo = Number(String(colM || "").replace(/\./g, "").replace(",", ".")) || 0;
-      const proveedor = cells[4] || "";
-
-      if (!mapProd.has(codigo)) {
-        mapProd.set(codigo, { codigo, descripcion: colB, iva_pct: ivaPct, existencia: 0, costo, proveedor });
-      } else {
-        const ex = mapProd.get(codigo);
-        if (costo > ex.costo) {
-          ex.costo = costo;
-          if (!ex.proveedor && proveedor) ex.proveedor = proveedor;
-        }
-      }
-    }
-    return Array.from(mapProd.values());
-  },
-
-  parseClientes(html) {
-    const rows = this.parseHtmlRows(html);
-    const clientes = [];
-    for (const cells of rows) {
-      if (cells.length < 6) continue;
-      let nombre = (cells[1] || "").replace(/^[,"\s]+/, "").trim();
-      const ciudad = (cells[3] || "").trim();
-      const nit = (cells[5] || "").trim();
-      if (!nombre) continue;
-      clientes.push({ nombre, ciudad, nit });
-    }
-    return clientes;
-  },
-
-  async readFileFromHandle(fileHandle) {
-    const file = await fileHandle.getFile();
-    const buffer = await file.arrayBuffer();
-    return new TextDecoder("iso-8859-1").decode(buffer);
-  },
-
-  async readFileFromInput(file) {
-    const buffer = await file.arrayBuffer();
-    return new TextDecoder("iso-8859-1").decode(buffer);
-  },
-
-  async syncFromFolder(onProgress) {
-    let dirHandle = await this.getSavedFolder();
-    if (!dirHandle || !(await FolderSaver._verifyPermission(dirHandle, "read"))) {
-      dirHandle = await this.pickFolder();
-    }
-
-    onProgress({ pct: 5, msg: `Buscando archivos en carpeta "${dirHandle.name}"...` });
-
-    let fileHandleProd = null;
-    let fileHandleClie = null;
-
-    try {
-      fileHandleProd = await dirHandle.getFileHandle("Resumen_de_existencias_UC.xls");
-    } catch {
-      for await (const [name, handle] of dirHandle.entries()) {
-        if (handle.kind === "file" && /resumen.*existencias.*\.xls/i.test(name)) {
-          fileHandleProd = handle;
-          break;
-        }
-      }
-    }
-
-    try {
-      fileHandleClie = await dirHandle.getFileHandle("Directorio.xls");
-    } catch {
-      for await (const [name, handle] of dirHandle.entries()) {
-        if (handle.kind === "file" && /directorio.*\.xls/i.test(name)) {
-          fileHandleClie = handle;
-          break;
-        }
-      }
-    }
-
-    if (!fileHandleProd) {
-      throw new Error(`No se encontró el archivo "Resumen_de_existencias_UC.xls" en la carpeta "${dirHandle.name}".`);
-    }
-    if (!fileHandleClie) {
-      throw new Error(`No se encontró el archivo "Directorio.xls" en la carpeta "${dirHandle.name}".`);
-    }
-
-    onProgress({ pct: 15, msg: "Leyendo archivos de Excel..." });
-    const htmlProd = await this.readFileFromHandle(fileHandleProd);
-    const htmlClie = await this.readFileFromHandle(fileHandleClie);
-
-    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
-  },
-
-  async syncFromFiles(fileProd, fileClie, onProgress) {
-    onProgress({ pct: 10, msg: "Leyendo archivos seleccionados..." });
-    const htmlProd = await this.readFileFromInput(fileProd);
-    const htmlClie = await this.readFileFromInput(fileClie);
-    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
-  },
-
-  async uploadToSupabase(htmlProd, htmlClie, onProgress) {
-    const sb = getSb();
-    if (!sb) throw new Error("No hay conexión con Supabase.");
-
-    onProgress({ pct: 20, msg: "Procesando productos y clientes..." });
-    const productos = this.parseProductos(htmlProd);
-    const clientes = this.parseClientes(htmlClie);
-
-    if (!productos.length) throw new Error("No se encontraron productos válidos en el archivo de existencias.");
-    if (!clientes.length) throw new Error("No se encontraron clientes válidos en el archivo de directorio.");
-
-    onProgress({ pct: 30, msg: "Preparando base de datos en la nube..." });
-    await sb.from("productos").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-    await sb.from("clientes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-
-    const totalRecords = productos.length + clientes.length;
-    let processedRecords = 0;
-    const chunk = 500;
-
-    // Subir productos
-    for (let i = 0; i < productos.length; i += chunk) {
-      const slice = productos.slice(i, i + chunk);
-      const { error } = await sb.from("productos").insert(slice);
-      if (error) throw new Error("Error subiendo productos a Supabase: " + error.message);
-      processedRecords += slice.length;
-      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
-      onProgress({
-        pct,
-        msg: `Subiendo productos (${Math.min(i + chunk, productos.length).toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
-      });
-    }
-
-    // Subir clientes
-    for (let i = 0; i < clientes.length; i += chunk) {
-      const slice = clientes.slice(i, i + chunk);
-      const { error } = await sb.from("clientes").insert(slice);
-      if (error) throw new Error("Error subiendo clientes a Supabase: " + error.message);
-      processedRecords += slice.length;
-      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
-      onProgress({
-        pct,
-        msg: `Subiendo clientes (${Math.min(i + chunk, clientes.length).toLocaleString("es-CO")}/${clientes.length.toLocaleString("es-CO")})...`
-      });
-    }
-
-    onProgress({ pct: 95, msg: "Recargando catálogo actualizado..." });
-    await AppInit.boot();
-    onProgress({ pct: 100, msg: "✅ ¡Base de datos actualizada con éxito!" });
-
-    return {
-      productos: productos.length,
-      clientes: clientes.length
-    };
-  }
-};
-window.DataSync = DataSync;
-
-
-
-let STATE = {
-  datos: [],
-  cyp: { clientes: [], asesores: [] },
-  cotizaciones: [],
-  seq: {},
-  lastUpdate: null
-};
-
-let DRAFT = null;
-
-function persistStateLocal() {
-  try {
-    localStorage.setItem("cotizador_state_cache", JSON.stringify(STATE));
-  } catch (e) {}
-}
-
-function loadStateLocal() {
-  try {
-    const raw = localStorage.getItem("cotizador_state_cache");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") STATE = { ...STATE, ...parsed };
-    }
-  } catch (e) {}
-}
 
 const DB = {
-  getDatos() { return STATE.datos || []; },
-  getCYP() { return STATE.cyp || { clientes: [], asesores: [] }; },
-  getCotizaciones() { return STATE.cotizaciones || []; },
-  setCotizaciones(v) { STATE.cotizaciones = v; persistStateLocal(); },
+  getDatos() { return STATE.datos; },
+  getCYP() { return STATE.cyp; },
+  getCotizaciones() { return STATE.cotizaciones; },
+  setCotizaciones(v) { STATE.cotizaciones = v; },
   nextNumero() {
     const year = new Date().getFullYear();
-    const cots = STATE.cotizaciones || [];
-    let maxN = 0;
-    cots.forEach(c => {
-      const m = String(c.numero || "").match(/^(?:C-)?(\d{4})-(\d+)$/);
-      if (m && Number(m[1]) === year) {
-        maxN = Math.max(maxN, parseInt(m[2], 10));
-      }
-    });
-    const nextVal = maxN + 1;
-    return {
-      preview: `C-${year}-${nextVal}`,
-      commit: () => {}
-    };
+    lastNum += 1;
+    return { preview: "C-" + year + "-" + lastNum, commit() {} };
   }
 };
 
+/* ============================================================
+   HELPERS
+   ============================================================ */
 function toast(msg, isError) {
   const t = document.getElementById("toast");
   if (!t) return;
@@ -419,45 +303,24 @@ function toast(msg, isError) {
   clearTimeout(toast._h);
   toast._h = setTimeout(() => t.classList.remove("show"), 3500);
 }
-
 function fmtCOP(n) {
   n = Math.round(Number(n) || 0);
   return "$" + n.toLocaleString("es-CO");
 }
-
 function parseNum(v) {
   if (typeof v === "number") return v;
   if (!v) return 0;
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
-
 function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-// Normaliza texto: minúsculas y sin tildes, para búsquedas tolerantes a acentos
+/* Normaliza texto: minúsculas y sin tildes, para búsquedas tolerantes a acentos */
 function norm(s) {
   return String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-
-function formatFechaHora(isoStr) {
-  if (!isoStr) return "Sin registros previos";
-  try {
-    const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return "Sin registros previos";
-    return d.toLocaleString("es-CO", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true
-    });
-  } catch (e) {
-    return "Sin registros previos";
-  }
 }
 
 /* ============================================================
@@ -466,36 +329,27 @@ function formatFechaHora(isoStr) {
 const Router = {
   current: "home",
   go(view, opts) {
-    try {
-      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-      const target = document.getElementById("view-" + view);
-      if (target) target.classList.add("active");
-      const shell = document.querySelector(".app-shell");
-      if (shell) shell.classList.toggle("wide-nueva", view === "nueva");
-      this.current = view;
-      if (view === "nueva") Views.renderNueva(opts && opts.record);
-      if (view === "guardadas") Views.renderGuardadas();
-      if (view === "asesores") Views.renderAsesores();
-      if (view === "actualizar-excel") Views.renderActualizarExcel();
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } catch (e) {
-      console.error(e);
-      toast("Error al abrir pantalla: " + e.message, true);
-    }
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    const target = document.getElementById("view-" + view);
+    if (target) target.classList.add("active");
+    const shell = document.querySelector(".app-shell");
+    if (shell) shell.classList.toggle("wide-nueva", view === "nueva");
+    this.current = view;
+    if (view === "nueva") Views.renderNueva(opts && opts.record);
+    if (view === "guardadas") Views.renderGuardadas();
+    if (view === "asesores") Views.renderAsesores();
+    if (view === "actualizar-excel") Views.renderActualizarExcel();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 };
 
-window.addEventListener("error", e => { console.error(e.error || e.message); });
-window.addEventListener("unhandledrejection", e => { console.error(e.reason); });
-
 /* ============================================================
-   AUTOCOMPLETE
+   AUTOCOMPLETE + COMBO (igual que la app real)
    ============================================================ */
 function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemClass = "ac-item") {
   if (!inputEl || !listEl) return;
   let hi = -1, items = [];
   function close() { listEl.classList.remove("show"); listEl.innerHTML = ""; hi = -1; }
-
   inputEl.addEventListener("input", () => {
     const q = norm(inputEl.value);
     items = q ? getItems(q).slice(0, 40) : [];
@@ -504,7 +358,6 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
     listEl.classList.add("show");
     hi = -1;
   });
-
   listEl.addEventListener("mousedown", e => {
     const row = e.target.closest(`.${itemClass.split(" ")[0]}`) || e.target.closest(".ac-item");
     if (!row) return;
@@ -512,7 +365,6 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
     onPick(items[+row.dataset.i]);
     close();
   });
-
   inputEl.addEventListener("keydown", e => {
     const rows = [...listEl.querySelectorAll(`.${itemClass.split(" ")[0]}`)];
     if (!rows.length) return;
@@ -522,29 +374,21 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
       e.preventDefault();
       if (hi >= 0 && items[hi]) { onPick(items[hi]); close(); }
       return;
-    } else if (e.key === "Escape") {
-      close();
-      return;
-    } else return;
+    } else if (e.key === "Escape") { close(); return; }
+    else return;
     rows.forEach((r, i) => r.classList.toggle("hi", i === hi));
     rows[hi] && rows[hi].scrollIntoView({ block: "nearest" });
   });
-
   inputEl.addEventListener("blur", () => setTimeout(close, 200));
 }
 
-/* ============================================================
-   COMBO DROPDOWN PERSONALIZADO (Lista desplegable + escritura libre)
-   ============================================================ */
 function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
   if (!inputEl || !dropdownEl) return;
   let hi = -1;
-
   function render(filter = "") {
     const q = norm(filter);
     const filtered = q ? options.filter(o => norm(o).includes(q)) : options;
     const currentVal = norm(inputEl.value);
-
     if (!filtered.length) {
       dropdownEl.innerHTML = `<div style="padding:10px 14px;font-size:12.5px;color:var(--texto-suave);text-align:center">No hay coincidencias (puedes escribir texto libre)</div>`;
     } else {
@@ -560,41 +404,16 @@ function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
     }
     hi = -1;
   }
-
-  function open() {
-    render(inputEl.value);
-    dropdownEl.classList.add("show");
-  }
-
-  function close() {
-    dropdownEl.classList.remove("show");
-    hi = -1;
-  }
-
+  function open() { render(inputEl.value); dropdownEl.classList.add("show"); }
+  function close() { dropdownEl.classList.remove("show"); hi = -1; }
   function toggle() {
-    if (dropdownEl.classList.contains("show")) {
-      close();
-    } else {
-      render("");
-      dropdownEl.classList.add("show");
-      inputEl.focus();
-    }
+    if (dropdownEl.classList.contains("show")) { close(); }
+    else { render(""); dropdownEl.classList.add("show"); inputEl.focus(); }
   }
-
   inputEl.addEventListener("focus", () => open());
   inputEl.addEventListener("click", () => open());
-  inputEl.addEventListener("input", () => {
-    render(inputEl.value);
-    dropdownEl.classList.add("show");
-  });
-
-  if (arrowBtnEl) {
-    arrowBtnEl.addEventListener("mousedown", e => {
-      e.preventDefault();
-      toggle();
-    });
-  }
-
+  inputEl.addEventListener("input", () => { render(inputEl.value); dropdownEl.classList.add("show"); });
+  if (arrowBtnEl) arrowBtnEl.addEventListener("mousedown", e => { e.preventDefault(); toggle(); });
   dropdownEl.addEventListener("mousedown", e => {
     const optEl = e.target.closest(".combo-option");
     if (!optEl || !optEl.dataset.val) return;
@@ -605,9 +424,7 @@ function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
     inputEl.dispatchEvent(new Event("input", { bubbles: true }));
     inputEl.dispatchEvent(new Event("change", { bubbles: true }));
   });
-
   inputEl.addEventListener("blur", () => setTimeout(close, 200));
-
   inputEl.addEventListener("keydown", e => {
     const rows = [...dropdownEl.querySelectorAll(".combo-option")];
     if (e.key === "ArrowDown") {
@@ -626,137 +443,11 @@ function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
         close();
         return;
       }
-    } else if (e.key === "Escape") {
-      close();
-      return;
-    } else return;
-
+    } else if (e.key === "Escape") { close(); return; }
+    else return;
     rows.forEach((r, i) => r.classList.toggle("hi", i === hi));
     rows[hi] && rows[hi].scrollIntoView({ block: "nearest" });
   });
-}
-
-/* ============================================================
-   INICIALIZACIÓN Y CARGA DE SUPABASE
-   ============================================================ */
-const AppInit = {
-  async boot() {
-    loadStateLocal();
-    const sb = getSb();
-    if (!sb) {
-      console.warn("Supabase no está disponible en este momento, usando caché local.");
-      return;
-    }
-
-    try {
-      // 1. Asesores
-      const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
-      STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
-
-      // 2. Clientes (paginado para cargar todos los miles de registros)
-      let allClientes = [];
-      let fromC = 0;
-      const stepC = 1000;
-      let hasMoreC = true;
-      while (hasMoreC) {
-        const { data: chunkC, error: errC } = await sb.from("clientes")
-          .select("nombre, ciudad, nit")
-          .order("nombre")
-          .range(fromC, fromC + stepC - 1);
-        if (errC || !chunkC || !chunkC.length) {
-          hasMoreC = false;
-        } else {
-          allClientes.push(...chunkC);
-          if (chunkC.length < stepC) hasMoreC = false;
-          else fromC += stepC;
-        }
-      }
-      STATE.cyp.clientes = allClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
-
-      // 3. Cotizaciones (paginado)
-      let allCotizaciones = [];
-      let fromCot = 0;
-      const stepCot = 1000;
-      let hasMoreCot = true;
-      while (hasMoreCot) {
-        const { data: chunkCot, error: errCot } = await sb.from("cotizaciones")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .range(fromCot, fromCot + stepCot - 1);
-        if (errCot || !chunkCot || !chunkCot.length) {
-          hasMoreCot = false;
-        } else {
-          allCotizaciones.push(...chunkCot);
-          if (chunkCot.length < stepCot) hasMoreCot = false;
-          else fromCot += stepCot;
-        }
-      }
-      STATE.cotizaciones = allCotizaciones.map(c => ({
-        numero: c.numero,
-        fecha: c.fecha,
-        cliente: c.cliente_nombre,
-        nit: c.cliente_nit,
-        ciudad: c.cliente_ciudad,
-        contacto: c.contacto || "",
-        asesor: c.asesor_nombre,
-        tiempoEntrega: c.tiempo_entrega,
-        formaPago: c.forma_pago,
-        validez: c.validez,
-        observaciones: c.observaciones,
-        subtotal: Number(c.subtotal) || 0,
-        iva: Number(c.iva) || 0,
-        total: Number(c.total) || 0,
-        items: c.items || []
-      }));
-
-      // 4. Productos
-      let allProducts = [];
-      let from = 0;
-      const step = 1000;
-      let hasMore = true;
-      let latestUpdated = null;
-
-      while (hasMore) {
-        const { data: dbProd, error } = await sb.from("productos").select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at").range(from, from + step - 1);
-        if (error || !dbProd || !dbProd.length) {
-          hasMore = false;
-        } else {
-          allProducts.push(...dbProd);
-          if (!latestUpdated && dbProd[0] && dbProd[0].updated_at) {
-            latestUpdated = dbProd[0].updated_at;
-          }
-          if (dbProd.length < step) hasMore = false;
-          else from += step;
-        }
-      }
-
-      STATE.datos = allProducts.map(p => [
-        p.codigo,
-        p.descripcion,
-        Number(p.iva_pct) || 0,
-        Number(p.existencia) || 0,
-        Number(p.costo) || 0,
-        p.proveedor || ""
-      ]);
-
-      if (latestUpdated) {
-        STATE.lastUpdate = latestUpdated;
-      } else if (allProducts.length === 0) {
-        STATE.lastUpdate = null;
-      }
-
-      persistStateLocal();
-      console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
-    } catch (e) {
-      console.error("Error sincronizando con Supabase:", e);
-    }
-  }
-};
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => AppInit.boot());
-} else {
-  AppInit.boot();
 }
 
 /* ============================================================
@@ -764,26 +455,18 @@ if (document.readyState === "loading") {
    ============================================================ */
 const Views = {};
 
-/* ---------- 📊 ACTUALIZAR DATOS (SINCRONIZACIÓN Y RESUMEN) ---------- */
-Views.renderActualizarExcel = async function () {
+/* ---------- 📊 ACTUALIZAR DATOS (SINCRONIZACIÓN SIMULADA) ---------- */
+Views.renderActualizarExcel = function () {
   const el = document.getElementById("view-actualizar-excel");
-  const totalProd = (STATE.datos || []).length;
-  const totalClie = ((STATE.cyp && STATE.cyp.clientes) || []).length;
-  const fechaStr = formatFechaHora(STATE.lastUpdate);
-
+  const totalProd = STATE.datos.length;
+  const totalClie = STATE.cyp.clientes.length;
   const hasFSA = ("showDirectoryPicker" in window);
-  let savedFolder = null;
-  if (hasFSA) {
-    try { savedFolder = await DataSync.getSavedFolder(); } catch {}
-  }
-  const folderName = savedFolder ? savedFolder.name : null;
 
   el.innerHTML = `
     <div class="section-head">
       <h2>Estado de la Base de Datos</h2>
       <span class="back" onclick="Router.go('home')">← Volver al inicio</span>
     </div>
-
     <div class="card">
       <div style="font-size:14.5px;font-weight:700;color:var(--azul-950);margin-bottom:4px">
         Resumen de Datos Disponibles
@@ -791,7 +474,6 @@ Views.renderActualizarExcel = async function () {
       <div style="font-size:13px;color:var(--texto-suave);line-height:1.45;margin-bottom:16px">
         Información actual sincronizada en la nube (Supabase):
       </div>
-
       <div class="data-summary-box">
         <div class="data-metric">
           <div class="data-metric-val" id="metricProd">${totalProd.toLocaleString("es-CO")}</div>
@@ -802,26 +484,23 @@ Views.renderActualizarExcel = async function () {
           <div class="data-metric-lbl">👥 Clientes</div>
         </div>
         <div class="data-metric" style="grid-column: span 1;">
-          <div class="data-metric-val" id="metricFecha" style="font-size:14.5px;font-weight:700;margin-top:4px;color:var(--teal-700)">${fechaStr}</div>
+          <div class="data-metric-val" id="metricFecha" style="font-size:14.5px;font-weight:700;margin-top:4px;color:var(--teal-700)">Simulada: ${HOY}</div>
           <div class="data-metric-lbl" style="margin-top:4px">🕒 Última Actualización</div>
         </div>
       </div>
 
-      <!-- Sincronizador Web desde Dropbox / Carpeta Local -->
       <div class="sync-card">
         <div class="sync-title">
           <span>⚡ Actualizar desde Dropbox / Carpeta Local</span>
-          ${folderName ? `<span class="sync-folder-info" id="badgeFolderName">📁 Carpeta: ${esc(folderName)}</span>` : `<span class="sync-folder-info" id="badgeFolderName" style="display:none"></span>`}
+          <span class="sync-folder-info" id="badgeFolderName" style="display:none"></span>
         </div>
         <div class="sync-desc">
           Coloca los archivos <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en la carpeta compartida y presiona el botón para sincronizar la base de datos de inmediato.
         </div>
-
         <div class="sync-progress-wrap" id="syncProgressWrap">
           <div class="sync-progress-bar" id="syncProgressBar"></div>
         </div>
         <div class="sync-status-msg" id="syncStatusMsg"></div>
-
         <div class="sync-actions">
           ${hasFSA ? `
             <button class="btn btn-accent" id="btnSyncFolder" style="padding:10px 18px;font-size:13.5px">
@@ -845,7 +524,6 @@ Views.renderActualizarExcel = async function () {
   const progressBar = document.getElementById("syncProgressBar");
   const statusMsg = document.getElementById("syncStatusMsg");
   const btnSync = document.getElementById("btnSyncFolder");
-  const btnChange = document.getElementById("btnChangeDataFolder");
   const btnReload = document.getElementById("btnReloadSupabase");
   const manualInput = document.getElementById("manualFileInput");
 
@@ -857,125 +535,59 @@ Views.renderActualizarExcel = async function () {
       statusMsg.textContent = msg;
     }
   }
-
   function hideProgress() {
     setTimeout(() => {
       if (progressWrap) progressWrap.style.display = "none";
       if (statusMsg) statusMsg.style.display = "none";
     }, 4000);
   }
-
-  function refreshMetrics() {
-    const pCount = (STATE.datos || []).length;
-    const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
-    document.getElementById("metricProd").textContent = pCount.toLocaleString("es-CO");
-    document.getElementById("metricClie").textContent = cCount.toLocaleString("es-CO");
-    document.getElementById("metricFecha").textContent = formatFechaHora(STATE.lastUpdate);
-  }
-
-  // Sincronización desde Carpeta (Dropbox)
-  if (btnSync) {
-    btnSync.addEventListener("click", async () => {
-      btnSync.disabled = true;
-      if (btnChange) btnChange.disabled = true;
-      if (btnReload) btnReload.disabled = true;
-
-      try {
-        const result = await DataSync.syncFromFolder(({ pct, msg }) => showProgress(pct, msg));
-        refreshMetrics();
-        toast(`✅ ¡Éxito! Sincronizados ${result.productos.toLocaleString("es-CO")} productos y ${result.clientes.toLocaleString("es-CO")} clientes.`);
-        // Actualizar badge de carpeta
-        const saved = await DataSync.getSavedFolder();
-        if (saved && document.getElementById("badgeFolderName")) {
-          const b = document.getElementById("badgeFolderName");
-          b.textContent = `📁 Carpeta: ${saved.name}`;
-          b.style.display = "inline-flex";
-        }
-      } catch (err) {
-        console.error("Error en sincronización:", err);
-        showProgress(100, "❌ " + err.message);
-        toast(err.message, true);
-      } finally {
+  function runFakeSync() {
+    let pct = 0;
+    btnSync.disabled = true;
+    if (btnReload) btnReload.disabled = true;
+    const steps = [
+      { p: 15, m: "Buscando archivos en carpeta..." },
+      { p: 30, m: "Leyendo archivos de Excel..." },
+      { p: 55, m: "Procesando productos y clientes..." },
+      { p: 75, m: "Preparando base de datos en la nube..." },
+      { p: 95, m: "Subiendo registros a Supabase..." }
+    ];
+    const iv = setInterval(() => {
+      pct += 6;
+      showProgress(Math.min(pct, 100), "Procesando (" + pct + "%)...");
+      steps.forEach(s => { if (pct >= s.p) statusMsg.textContent = s.m; });
+      if (pct >= 100) {
+        clearInterval(iv);
+        showProgress(100, "✅ ¡Base de datos actualizada con éxito! (simulación)");
+        toast(`✅ ¡Éxito! Sincronizados ${totalProd.toLocaleString("es-CO")} productos y ${totalClie.toLocaleString("es-CO")} clientes.`);
         btnSync.disabled = false;
-        if (btnChange) btnChange.disabled = false;
         if (btnReload) btnReload.disabled = false;
         hideProgress();
       }
-    });
+    }, 180);
   }
 
-  // Cambiar Carpeta
-  if (btnChange) {
-    btnChange.addEventListener("click", async () => {
-      try {
-        const handle = await DataSync.pickFolder();
-        const b = document.getElementById("badgeFolderName");
-        if (b) {
-          b.textContent = `📁 Carpeta: ${handle.name}`;
-          b.style.display = "inline-flex";
-        }
-        toast(`✅ Carpeta configurada: ${handle.name}`);
-      } catch (e) {
-        if (e.name !== "AbortError") toast(e.message, true);
-      }
-    });
-  }
-
-  // Subir archivos manualmente (.xls)
-  if (manualInput) {
-    manualInput.addEventListener("change", async (e) => {
-      const files = Array.from(e.target.files || []);
-      if (!files.length) return;
-
-      const fileProd = files.find(f => /resumen.*existencias/i.test(f.name) || /existencias/i.test(f.name));
-      const fileClie = files.find(f => /directorio/i.test(f.name) || /clientes/i.test(f.name));
-
-      if (!fileProd || !fileClie) {
-        return toast("Debes seleccionar ambos archivos: 'Resumen_de_existencias_UC.xls' y 'Directorio.xls'", true);
-      }
-
-      if (btnSync) btnSync.disabled = true;
-      if (btnReload) btnReload.disabled = true;
-
-      try {
-        const result = await DataSync.syncFromFiles(fileProd, fileClie, ({ pct, msg }) => showProgress(pct, msg));
-        refreshMetrics();
-        toast(`✅ ¡Éxito! Sincronizados ${result.productos.toLocaleString("es-CO")} productos y ${result.clientes.toLocaleString("es-CO")} clientes.`);
-      } catch (err) {
-        console.error("Error en subida manual:", err);
-        showProgress(100, "❌ " + err.message);
-        toast(err.message, true);
-      } finally {
-        if (btnSync) btnSync.disabled = false;
-        if (btnReload) btnReload.disabled = false;
-        manualInput.value = "";
-        hideProgress();
-      }
-    });
-  }
-
-  // Recargar desde Supabase
-  if (btnReload) {
-    btnReload.addEventListener("click", async () => {
-      btnReload.disabled = true;
-      btnReload.textContent = "Recargando...";
-      try {
-        await AppInit.boot();
-        refreshMetrics();
-        const pCount = (STATE.datos || []).length;
-        const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
-        toast(`Datos recargados: ${pCount.toLocaleString("es-CO")} productos y ${cCount.toLocaleString("es-CO")} clientes.`);
-      } catch (e) {
-        toast("Error al conectar con la nube: " + e.message, true);
-      } finally {
-        btnReload.disabled = false;
-        btnReload.textContent = "🔄 Recargar datos";
-      }
-    });
-  }
+  if (btnSync) btnSync.addEventListener("click", runFakeSync);
+  const btnChange = document.getElementById("btnChangeDataFolder");
+  if (btnChange) btnChange.addEventListener("click", () => toast("📁 Simulación: aquí se abriría el selector de carpeta Dropbox"));
+  if (manualInput) manualInput.addEventListener("change", e => {
+    if (e.target.files && e.target.files.length) {
+      e.target.value = "";
+      setTimeout(() => runFakeSync(), 300);
+    }
+  });
+  if (btnReload) btnReload.addEventListener("click", () => {
+    btnReload.disabled = true;
+    btnReload.textContent = "Recargando...";
+    setTimeout(() => {
+      btnReload.disabled = false;
+      btnReload.textContent = "🔄 Recargar datos";
+      toast(`Datos recargados: ${totalProd.toLocaleString("es-CO")} productos y ${totalClie.toLocaleString("es-CO")} clientes.`);
+    }, 800);
+  });
 };
 
-/* ---------- 👤 ASESORES ---------- */
+/* ---------- 👤 ASESORES (CRUD local simulado) ---------- */
 Views.renderAsesores = function () {
   const el = document.getElementById("view-asesores");
   el.innerHTML = `
@@ -1001,32 +613,14 @@ Views.renderAsesores = function () {
     return STATE.cyp.asesores;
   }
 
-  async function syncAsesoresToSupabase(nuevoNombre, accion, nombreAntiguo) {
-    const sb = getSb();
-    if (!sb) return;
-    try {
-      if (accion === "add") {
-        await sb.from("asesores").insert([{ nombre: nuevoNombre }]);
-      } else if (accion === "edit") {
-        await sb.from("asesores").update({ nombre: nuevoNombre }).eq("nombre", nombreAntiguo);
-      } else if (accion === "delete") {
-        await sb.from("asesores").delete().eq("nombre", nuevoNombre);
-      }
-    } catch (e) {
-      console.warn("Error sincronizando asesor con Supabase:", e);
-    }
-  }
-
   function paintAsesores() {
     const list = document.getElementById("asesorList");
     if (!list) return;
     const asesores = getAsesoresList();
-
     if (!asesores.length) {
       list.innerHTML = `<div class="empty" style="padding:24px 0">No hay asesores registrados. Agrega uno arriba.</div>`;
       return;
     }
-
     list.innerHTML = asesores.map((a, i) => {
       if (editingIndex === i) {
         return `
@@ -1064,103 +658,66 @@ Views.renderAsesores = function () {
           if (e.key === "Enter") {
             const btn = list.querySelector(`[data-save-edit="${editingIndex}"]`);
             if (btn) btn.click();
-          } else if (e.key === "Escape") {
-            editingIndex = -1;
-            paintAsesores();
-          }
+          } else if (e.key === "Escape") { editingIndex = -1; paintAsesores(); }
         });
       }
     }
-
     list.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => {
-      editingIndex = Number(btn.dataset.edit);
-      deletingIndex = -1;
-      paintAsesores();
+      editingIndex = Number(btn.dataset.edit); deletingIndex = -1; paintAsesores();
     }));
-
-    list.querySelectorAll("[data-save-edit]").forEach(btn => btn.addEventListener("click", async () => {
+    list.querySelectorAll("[data-save-edit]").forEach(btn => btn.addEventListener("click", () => {
       const i = Number(btn.dataset.saveEdit);
       const input = document.getElementById(`editAsesorInput_${i}`);
       const nuevo = input ? input.value.trim() : "";
       if (!nuevo) return toast("El nombre no puede quedar vacío", true);
       const asesoresActuales = [...getAsesoresList()];
-      const antiguo = asesoresActuales[i];
       if (asesoresActuales.some((a, j) => j !== i && norm(a) === norm(nuevo))) {
         return toast("Ya existe un asesor con ese nombre", true);
       }
       asesoresActuales[i] = nuevo;
       STATE.cyp.asesores = asesoresActuales;
-      persistStateLocal();
       editingIndex = -1;
-      await syncAsesoresToSupabase(nuevo, "edit", antiguo);
       toast("Asesor actualizado con éxito");
       paintAsesores();
     }));
-
-    list.querySelectorAll("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
-      editingIndex = -1;
-      paintAsesores();
-    }));
-
-    list.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => {
-      deletingIndex = Number(btn.dataset.delete);
-      editingIndex = -1;
-      paintAsesores();
-    }));
-
-    list.querySelectorAll("[data-confirm-del]").forEach(btn => btn.addEventListener("click", async () => {
+    list.querySelectorAll("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => { editingIndex = -1; paintAsesores(); }));
+    list.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => { deletingIndex = Number(btn.dataset.delete); editingIndex = -1; paintAsesores(); }));
+    list.querySelectorAll("[data-confirm-del]").forEach(btn => btn.addEventListener("click", () => {
       const i = Number(btn.dataset.confirmDel);
       const asesoresActuales = [...getAsesoresList()];
       if (i >= 0 && i < asesoresActuales.length) {
         const removed = asesoresActuales.splice(i, 1)[0];
-        deletingIndex = -1;
-        editingIndex = -1;
+        deletingIndex = -1; editingIndex = -1;
         STATE.cyp.asesores = asesoresActuales;
-        persistStateLocal();
-        await syncAsesoresToSupabase(removed, "delete");
         toast(`Asesor "${removed}" eliminado`);
         paintAsesores();
       }
     }));
-
-    list.querySelectorAll("[data-cancel-del]").forEach(btn => btn.addEventListener("click", () => {
-      deletingIndex = -1;
-      paintAsesores();
-    }));
+    list.querySelectorAll("[data-cancel-del]").forEach(btn => btn.addEventListener("click", () => { deletingIndex = -1; paintAsesores(); }));
   }
 
   const addBtn = document.getElementById("addAsesorBtn");
   const addInput = document.getElementById("asesorNombre");
-
-  async function handleAdd() {
+  function handleAdd() {
     const nombre = addInput.value.trim();
     if (!nombre) return toast("Escribe el nombre del asesor", true);
     const asesoresActuales = [...getAsesoresList()];
-    if (asesoresActuales.some(a => norm(a) === norm(nombre))) {
-      return toast("Ese asesor ya existe", true);
-    }
+    if (asesoresActuales.some(a => norm(a) === norm(nombre))) return toast("Ese asesor ya existe", true);
     asesoresActuales.push(nombre);
     STATE.cyp.asesores = asesoresActuales;
-    persistStateLocal();
     addInput.value = "";
-    editingIndex = -1;
-    deletingIndex = -1;
-    await syncAsesoresToSupabase(nombre, "add");
     toast("Asesor agregado correctamente");
     paintAsesores();
     addInput.focus();
   }
-
   addBtn.addEventListener("click", handleAdd);
   addInput.addEventListener("keydown", e => { if (e.key === "Enter") handleAdd(); });
-
   paintAsesores();
 };
 
-/* ---------- 📁 COTIZACIONES GUARDADAS (BÚSQUEDA Y FILTRO INTERACTIVO) ---------- */
+/* ---------- 📁 COTIZACIONES GUARDADAS (BÚSQUEDA Y ORDENAMIENTO) ---------- */
 Views.renderGuardadas = function () {
   const el = document.getElementById("view-guardadas");
-
   el.innerHTML = `
     <div class="section-head">
       <h2>Cotizaciones guardadas</h2>
@@ -1188,7 +745,6 @@ Views.renderGuardadas = function () {
   function paint() {
     const list = document.getElementById("cotList");
     if (!list) return;
-
     let cots = DB.getCotizaciones().slice();
     const q = norm(currentSearch);
     if (q) {
@@ -1198,25 +754,15 @@ Views.renderGuardadas = function () {
         (c.asesor && norm(c.asesor).includes(q))
       );
     }
-
-    // Ordenamiento por columna
     cots.sort((a, b) => {
       let res = 0;
-      if (sortCol === "numero") {
-        res = String(a.numero || "").localeCompare(String(b.numero || ""), undefined, { numeric: true });
-      } else if (sortCol === "cliente") {
-        res = String(a.cliente || "").localeCompare(String(b.cliente || ""));
-      } else if (sortCol === "fecha") {
-        res = String(a.fecha || "").localeCompare(String(b.fecha || ""));
-      } else if (sortCol === "asesor") {
-        res = String(a.asesor || "").localeCompare(String(b.asesor || ""));
-      } else if (sortCol === "total") {
-        res = (Number(a.total) || 0) - (Number(b.total) || 0);
-      }
+      if (sortCol === "numero") res = String(a.numero || "").localeCompare(String(b.numero || ""), undefined, { numeric: true });
+      else if (sortCol === "cliente") res = String(a.cliente || "").localeCompare(String(b.cliente || ""));
+      else if (sortCol === "fecha") res = String(a.fecha || "").localeCompare(String(b.fecha || ""));
+      else if (sortCol === "asesor") res = String(a.asesor || "").localeCompare(String(b.asesor || ""));
+      else if (sortCol === "total") res = (Number(a.total) || 0) - (Number(b.total) || 0);
       return sortAsc ? res : -res;
     });
-
-    // Actualizar iconos de cabecera
     document.querySelectorAll("#cotHeaderRow span[data-sort]").forEach(sp => {
       const col = sp.dataset.sort;
       const ic = sp.querySelector(".sort-ic");
@@ -1228,12 +774,10 @@ Views.renderGuardadas = function () {
         if (ic) ic.textContent = "";
       }
     });
-
     if (!cots.length) {
       list.innerHTML = `<div class="empty"><div class="ic">🔍</div>Sin resultados</div>`;
       return;
     }
-
     list.innerHTML = cots.map(c => `
       <div class="list-row" data-numero="${esc(c.numero)}">
         <span class="n">${esc(c.numero)}</span>
@@ -1243,32 +787,21 @@ Views.renderGuardadas = function () {
         <span style="font-family:var(--mono);font-weight:700;color:var(--azul-950);text-align:right">${fmtCOP(c.total)}</span>
       </div>
     `).join("");
-
     list.querySelectorAll(".list-row[data-numero]").forEach(row => {
       row.addEventListener("click", () => Router.go("nueva", { record: row.dataset.numero }));
     });
   }
 
-  // Eventos de ordenamiento en cabeceras
   document.querySelectorAll("#cotHeaderRow span[data-sort]").forEach(sp => {
     sp.addEventListener("click", () => {
       const col = sp.dataset.sort;
-      if (sortCol === col) {
-        sortAsc = !sortAsc;
-      } else {
-        sortCol = col;
-        sortAsc = true;
-      }
+      if (sortCol === col) sortAsc = !sortAsc;
+      else { sortCol = col; sortAsc = true; }
       paint();
     });
   });
-
   const searchInput = document.getElementById("cotSearch");
-  searchInput.addEventListener("input", e => {
-    currentSearch = e.target.value;
-    paint();
-  });
-
+  searchInput.addEventListener("input", e => { currentSearch = e.target.value; paint(); });
   paint();
 };
 
@@ -1279,7 +812,6 @@ Views.renderNueva = function (numeroToLoad) {
   const isEdit = !!existing;
   const source = isEdit ? existing : null;
   const numeroDisplay = isEdit ? existing.numero : "Se asigna al guardar";
-  const hoy = new Date().toISOString().slice(0, 10);
 
   Cotizador._editingNumero = isEdit ? existing.numero : null;
 
@@ -1297,7 +829,7 @@ Views.renderNueva = function (numeroToLoad) {
     <div class="card">
       <div class="grid g4">
         <div><label>N.°</label><input value="${numeroDisplay}" disabled style="font-family:var(--mono);background:#f3f4f3;font-weight:700;color:var(--azul-950)"></div>
-        <div><label>Fecha</label><input id="f_fecha" type="date" value="${source ? source.fecha : hoy}"></div>
+        <div><label>Fecha</label><input id="f_fecha" type="date" value="${source ? source.fecha : new Date().toISOString().slice(0, 10)}"></div>
         <div class="field">
           <label>Cliente *</label>
           <input id="f_cliente" autocomplete="off" value="${esc(source ? source.cliente || "" : "")}" placeholder="Buscar o escribir cliente...">
@@ -1408,23 +940,13 @@ Views.renderNueva = function (numeroToLoad) {
     document.getElementById("f_tiempo"),
     document.getElementById("dropdown_tiempo"),
     document.getElementById("btn_arrow_tiempo"),
-    [
-      "De 2 a 3 días hábiles",
-      "De 3 a 5 días hábiles",
-      "De 6 a 10 días hábiles",
-      "Inmediata"
-    ]
+    ["De 2 a 3 días hábiles", "De 3 a 5 días hábiles", "De 6 a 10 días hábiles", "Inmediata"]
   );
-
   attachDropdownCombo(
     document.getElementById("f_pago"),
     document.getElementById("dropdown_pago"),
     document.getElementById("btn_arrow_pago"),
-    [
-      "Credito",
-      "Contado",
-      "50% Anticipo, 50% Contraentrega"
-    ]
+    ["Credito", "Contado", "50% Anticipo, 50% Contraentrega"]
   );
 };
 
@@ -1444,7 +966,6 @@ ItemsUI.remove = function (i) {
 ItemsUI.paint = function () {
   const body = document.getElementById("itemsBody");
   if (!body) return;
-
   body.innerHTML = this.items.map((it, i) => `
     <tr>
       <td>
@@ -1486,7 +1007,6 @@ ItemsUI.paint = function () {
       this.items[i].vrUnitario = Math.round((Number(d[4]) || 0) * (1 + util));
       this.paint();
     };
-
     const renderProductItem = d => `
       <div class="ac-prod-top">
         <span class="ac-badge-code">${esc(d[0])}</span>
@@ -1498,7 +1018,6 @@ ItemsUI.paint = function () {
       <div class="ac-prod-name">${esc(d[1])}</div>
       ${d[5] ? `<div class="ac-prod-prov">Proveedor: <b>${esc(d[5])}</b></div>` : ""}
     `;
-
     const getProducts = q => {
       const datos = DB.getDatos();
       return datos.filter(d => (d[0] && norm(d[0]).includes(q)) || (d[1] && norm(d[1]).includes(q)));
@@ -1558,7 +1077,7 @@ ItemsUI.recalc = function () {
 };
 
 /* ============================================================
-   COTIZADOR — GUARDAR EN SUPABASE & GENERAR PDF
+   COTIZADOR — Guardar (en memoria) y generar PDF
    ============================================================ */
 const Cotizador = {
   _editingNumero: null,
@@ -1580,38 +1099,19 @@ const Cotizador = {
 
   validate(data, withPdf) {
     document.querySelectorAll("#view-nueva .err").forEach(e => e.classList.remove("err"));
-
     if (!withPdf) {
-      // Para guardar borrador/cotización: SOLO Cliente y Asesor son obligatorios
       const missing = [];
-      if (!data.cliente) {
-        missing.push("Cliente");
-        const el = document.getElementById("f_cliente");
-        if (el) el.classList.add("err");
-      }
-      if (!data.asesor) {
-        missing.push("Asesor");
-        const el = document.getElementById("f_asesor");
-        if (el) el.classList.add("err");
-      }
+      if (!data.cliente) { missing.push("Cliente"); const el = document.getElementById("f_cliente"); if (el) el.classList.add("err"); }
+      if (!data.asesor) { missing.push("Asesor"); const el = document.getElementById("f_asesor"); if (el) el.classList.add("err"); }
       return missing;
     } else {
-      // Para generar PDF: TODOS los campos son obligatorios
       const required = {
-        cliente: "Cliente",
-        contacto: "Contacto",
-        tiempoEntrega: "Tiempo de entrega",
-        formaPago: "Forma de pago",
-        validez: "Validez de la oferta",
-        asesor: "Asesor"
+        cliente: "Cliente", contacto: "Contacto", tiempoEntrega: "Tiempo de entrega",
+        formaPago: "Forma de pago", validez: "Validez de la oferta", asesor: "Asesor"
       };
       const map = {
-        cliente: "f_cliente",
-        contacto: "f_contacto",
-        tiempoEntrega: "f_tiempo",
-        formaPago: "f_pago",
-        validez: "f_validez",
-        asesor: "f_asesor"
+        cliente: "f_cliente", contacto: "f_contacto", tiempoEntrega: "f_tiempo",
+        formaPago: "f_pago", validez: "f_validez", asesor: "f_asesor"
       };
       const missing = [];
       for (const key in required) {
@@ -1628,20 +1128,13 @@ const Cotizador = {
   async save(withPdf) {
     const data = this.collect();
     const missing = this.validate(data, withPdf);
-
     if (missing.length) {
-      if (withPdf) {
-        return toast("Para generar el PDF debes completar: " + missing.join(", "), true);
-      } else {
-        return toast("Falta completar: " + missing.join(", "), true);
-      }
+      return toast(withPdf ? "Para generar el PDF debes completar: " + missing.join(", ") : "Falta completar: " + missing.join(", "), true);
     }
-
     const items = ItemsUI.items.filter(it => (it.codigo && String(it.codigo).trim()) || (it.descripcion && String(it.descripcion).trim()));
     if (withPdf && !items.length) {
       return toast("Para generar el PDF debes agregar al menos un producto a la cotización", true);
     }
-
     let subtotal = 0, iva = 0;
     items.forEach(it => {
       const cant = Number(it.cantidad) || 0;
@@ -1654,105 +1147,49 @@ const Cotizador = {
 
     const isEdit = !!this._editingNumero;
     let numero = this._editingNumero;
-    if (!numero) {
-      const seq = DB.nextNumero();
-      numero = seq.preview;
-    }
+    if (!numero) numero = DB.nextNumero().preview;
 
     const record = { numero, ...data, items, subtotal, iva, total: subtotal + iva };
-
     const all = [...DB.getCotizaciones()];
     const idx = all.findIndex(c => c.numero === numero);
     if (idx >= 0) all[idx] = record;
     else all.push(record);
     DB.setCotizaciones(all);
-
     this._editingNumero = null;
-    DRAFT = null;
-    persistStateLocal();
-
-    const sb = getSb();
-    if (sb) {
-      try {
-        const { error } = await sb.from("cotizaciones").upsert({
-          numero: record.numero,
-          fecha: record.fecha,
-          cliente_nombre: record.cliente,
-          cliente_nit: record.nit,
-          cliente_ciudad: record.ciudad,
-          asesor_nombre: record.asesor,
-          tiempo_entrega: record.tiempoEntrega,
-          forma_pago: record.formaPago,
-          validez: record.validez,
-          observaciones: record.observaciones,
-          subtotal: record.subtotal,
-          iva: record.iva,
-          total: record.total,
-          items: record.items,
-          updated_at: new Date().toISOString()
-        }, { onConflict: "numero" });
-        if (error) console.warn("Advertencia al guardar en Supabase:", error);
-      } catch (e) {
-        console.warn("Error guardando en Supabase:", e);
-      }
-    }
 
     toast(isEdit ? `Cotización ${numero} actualizada` : `Cotización ${numero} guardada`);
-
-    if (withPdf) {
-      await this.writePdf(record);
-    }
-
+    if (withPdf) await this.writePdf(record);
     Router.go("guardadas");
   },
 
   async remove(numero) {
     DB.setCotizaciones(DB.getCotizaciones().filter(c => c.numero !== numero));
-    const sb = getSb();
-    if (sb) {
-      try {
-        await sb.from("cotizaciones").delete().eq("numero", numero);
-      } catch (e) {
-        console.warn("Error eliminando en Supabase:", e);
-      }
-    }
     toast(`Cotización ${numero} eliminada`);
     Router.go("guardadas");
   },
 
   async writePdf(record) {
-    let blob;
+    const filename = `${record.numero}.pdf`;
     try {
-      blob = PdfBuilder.build(record);
+      const blob = PdfBuilder.build(record);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast(`PDF ${filename} descargado`);
     } catch (e) {
       console.error(e);
-      return toast("No se pudo generar el PDF: " + e.message, true);
-    }
-
-    const filename = `${record.numero}.pdf`;
-
-    // Subir a Supabase Storage (acceso compartido todos los usuarios)
-    const sb = getSb();
-    if (sb) {
-      try {
-        await sb.storage.from("cotizaciones-pdf").upload(filename, blob, { upsert: true });
-      } catch (e) {
-        console.warn("Error subiendo PDF a Supabase Storage:", e);
-      }
-    }
-
-    // Guardar en carpeta local (File System Access API) o descarga normal
-    const savedToFolder = await FolderSaver.saveBlob(blob, filename);
-    if (savedToFolder) {
-      toast(`✅ PDF ${filename} guardado en tu carpeta configurada`);
-    } else {
-      toast(`PDF ${filename} descargado`);
+      toast("No se pudo generar el PDF: " + e.message, true);
     }
   }
 };
 
 /* ============================================================
-   GENERADOR DE PDF (jsPDF) — diseño profesional y limpio
+   GENERADOR DE PDF (jsPDF) — diseño igual al de la app real
    ============================================================ */
 const PdfBuilder = {
   build(r) {
@@ -1783,20 +1220,22 @@ const PdfBuilder = {
 
     let y = 28;
 
-    // 1. ENCABEZADO: Logo + Información de la empresa
+    // 1. ENCABEZADO — identidad de la empresa (sin logo de imagen en simulación)
     const logoW = 120, logoH = 48;
-    try {
-      if (typeof LOGO_B64 !== "undefined") {
-        doc.addImage(LOGO_B64, "PNG", M, y + 2, logoW, logoH);
-      }
-    } catch (e) {}
+    doc.setFillColor(...navy);
+    doc.roundedRect(M, y, logoW, logoH, 4, 4, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text("M&M", M + logoW / 2, y + 22, { align: "center" });
+    doc.setFontSize(6.5);
+    doc.text("MEDICAL", M + logoW / 2, y + 31, { align: "center" });
 
     const infoX = M + logoW + 12;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10.5);
     doc.setTextColor(...navy);
     doc.text("REPRESENTACIONES M&M MEDICAL SAS", infoX, y + 10);
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(...textMuted);
@@ -1807,15 +1246,11 @@ const PdfBuilder = {
       "ventas.representacionesmym@gmail.com",
       "www.representacionesmymmedical.com"
     ];
-    compLines.forEach((line, idx) => {
-      doc.text(line, infoX, y + 21 + idx * 9.5);
-    });
+    compLines.forEach((line, idx) => doc.text(line, infoX, y + 21 + idx * 9.5));
 
-    // Badge Cotización
     const badgeW = 120;
     const badgeX = pageW - M - badgeW;
     const badgeY = y;
-
     doc.setFillColor(...navy);
     doc.roundedRect(badgeX, badgeY, badgeW, 20, 3, 3, "F");
     doc.rect(badgeX, badgeY + 16, badgeW, 4, "F");
@@ -1823,7 +1258,6 @@ const PdfBuilder = {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.text("COTIZACIÓN", badgeX + badgeW / 2, badgeY + 14, { align: "center" });
-
     doc.setFillColor(...bgBadge);
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
@@ -1832,21 +1266,18 @@ const PdfBuilder = {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10.5);
     doc.text(String(r.numero || "C-2026-1"), badgeX + badgeW / 2, badgeY + 34, { align: "center" });
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...textMuted);
     doc.text("Fecha: " + (r.fecha || ""), badgeX + badgeW, badgeY + 52, { align: "right" });
 
     y += 66;
-
-    // Línea divisoria azul
     doc.setDrawColor(...navy);
     doc.setLineWidth(2);
     doc.line(M, y, pageW - M, y);
     y += 12;
 
-    // 2. PANEL DE INFORMACIÓN DEL CLIENTE (Anchos optimizados para evitar textos cortados)
+    // 2. PANEL CLIENTE
     const clientCells = [
       { label: "CLIENTE", value: r.cliente || "—", w: contentW * 0.34 },
       { label: "NIT", value: r.nit || "—", w: contentW * 0.18 },
@@ -1874,14 +1305,12 @@ const PdfBuilder = {
       { key: "ivaPct", label: "IVA %", w: 42, align: "center" },
       { key: "valorTotal", label: "VR. TOTAL", w: 76, align: "right" }
     ];
-
     doc.setFillColor(...navy);
     doc.roundedRect(M, y, contentW, 20, 3, 3, "F");
     doc.rect(M, y + 15, contentW, 5, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(255, 255, 255);
-
     let curX = M;
     cols.forEach(c => {
       let tx = curX + 6;
@@ -1894,70 +1323,50 @@ const PdfBuilder = {
 
     const items = Array.isArray(r.items) ? r.items : [];
     doc.setLineWidth(0.6);
-
     items.forEach((it, idx) => {
       const vt = (Number(it.cantidad) || 0) * (Number(it.vrUnitario) || 0);
       const isEven = idx % 2 === 1;
-
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       const descLines = doc.splitTextToSize(String(it.descripcion || ""), cols[1].w - 12);
       const rowH = Math.max(18, 8 + descLines.length * 10);
-
-      if (isEven) {
-        doc.setFillColor(...bgZebra);
-        doc.rect(M, y, contentW, rowH, "F");
-      }
-
+      if (isEven) { doc.setFillColor(...bgZebra); doc.rect(M, y, contentW, rowH, "F"); }
       doc.setDrawColor(...borderSoft);
       doc.line(M, y + rowH, pageW - M, y + rowH);
-
       curX = M;
       doc.setTextColor(...textDark);
-
       doc.text(String(it.codigo || ""), curX + cols[0].w / 2, y + 12, { align: "center" });
       curX += cols[0].w;
-
       doc.text(descLines, curX + 6, y + 12);
       curX += cols[1].w;
-
       doc.text(String(it.cantidad || 0), curX + cols[2].w / 2, y + 12, { align: "center" });
       curX += cols[2].w;
-
       doc.text(fmtCOP(it.vrUnitario), curX + cols[3].w - 6, y + 12, { align: "right" });
       curX += cols[3].w;
-
       const ivaStr = Math.round((Number(it.ivaPct) || 0) * 100) + "%";
       doc.text(ivaStr, curX + cols[4].w / 2, y + 12, { align: "center" });
       curX += cols[4].w;
-
       doc.text(fmtCOP(vt), curX + cols[5].w - 6, y + 12, { align: "right" });
-
       y += rowH;
     });
-
     y += 8;
 
     // 5. TOTALES
     const totW = 195;
     const totX = pageW - M - totW;
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...textDark);
     doc.text("Subtotal:", totX + 10, y + 12);
     doc.text(fmtCOP(r.subtotal), totX + totW - 10, y + 12, { align: "right" });
     y += 16;
-
     doc.text("IVA:", totX + 10, y + 12);
     doc.text(fmtCOP(r.iva), totX + totW - 10, y + 12, { align: "right" });
     y += 16;
-
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
     doc.line(totX, y, totX + totW, y);
     y += 3;
-
     doc.setFillColor(...navy);
     doc.roundedRect(totX, y, totW, 22, 3, 3, "F");
     doc.setTextColor(255, 255, 255);
@@ -1971,28 +1380,23 @@ const PdfBuilder = {
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
     const boxTop = y;
-
     const defaultObs =
       "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
       "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
       "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
-
     const obsText = (r.observaciones && r.observaciones.trim()) || defaultObs;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.6);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
     const obsH = Math.max(92, 24 + obsLines.length * 10);
-
     doc.setFillColor(...bgPanel);
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
     doc.roundedRect(M, boxTop, obsW, obsH, 4, 4, "FD");
-
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(...navy);
     doc.text("OBSERVACIONES Y CONDICIONES", M + 10, boxTop + 14);
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.6);
     doc.setTextColor(...textDark);
@@ -2003,40 +1407,33 @@ const PdfBuilder = {
     doc.setDrawColor(...border);
     doc.setLineWidth(0.8);
     doc.roundedRect(firX, boxTop, firW, obsH, 4, 4, "FD");
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...textMuted);
     doc.text("Cordialmente,", firX + 12, boxTop + 24);
-
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
     doc.setTextColor(...navy);
     doc.text(String(r.asesor || "Equipo de Ventas"), firX + 12, boxTop + 52);
-
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...textMuted);
     doc.text("Representaciones M&M Medical SAS", firX + 12, boxTop + 65);
-
     y = boxTop + obsH + 16;
 
     // 7. PIE DE PÁGINA
     doc.setDrawColor(...borderSoft);
     doc.setLineWidth(0.6);
     doc.line(M, y, pageW - M, y);
-
     y += 10;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(...footerColor);
     doc.text(
       "Representaciones M&M Medical SAS · Bucaramanga, Colombia · Documento generado electrónicamente",
-      pageW / 2,
-      y,
+      pageW / 2, y,
       { align: "center" }
     );
-
     return y + 10;
   },
 
@@ -2046,31 +1443,23 @@ const PdfBuilder = {
     const wrapped = cells.map(c => doc.splitTextToSize(String(c.value || "—"), c.w - 12));
     const maxLines = Math.max(1, ...wrapped.map(l => l.length));
     const h = 18 + maxLines * 11;
-
     doc.setFillColor(...bgColor);
     doc.setDrawColor(...borderColor);
     doc.setLineWidth(0.8);
     doc.roundedRect(x0, y0, totalW, h, 4, 4, "FD");
-
     let curX = x0;
     cells.forEach((c, idx) => {
-      if (idx > 0) {
-        doc.setDrawColor(...borderColor);
-        doc.line(curX, y0, curX, y0 + h);
-      }
+      if (idx > 0) { doc.setDrawColor(...borderColor); doc.line(curX, y0, curX, y0 + h); }
       doc.setFont("helvetica", "bold");
       doc.setFontSize(7.2);
       doc.setTextColor(...labelColor);
       doc.text(c.label, curX + 6, y0 + 11);
-
       doc.setFont("helvetica", "bold");
       doc.setFontSize(8.8);
       doc.setTextColor(...valColor);
       doc.text(wrapped[idx], curX + 6, y0 + 23);
-
       curX += c.w;
     });
-
     return y0 + h;
   }
 };
@@ -2080,4 +1469,6 @@ window.Cotizador = Cotizador;
 window.ItemsUI = ItemsUI;
 window.Views = Views;
 window.DB = DB;
-window.AppInit = AppInit;
+</script>
+</body>
+</html>
