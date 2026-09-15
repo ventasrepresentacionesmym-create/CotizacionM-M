@@ -529,6 +529,109 @@ function attachAutocomplete(inputEl, listEl, getItems, renderItem, onPick, itemC
 }
 
 /* ============================================================
+   COMBO DROPDOWN PERSONALIZADO (Lista desplegable + escritura libre)
+   ============================================================ */
+function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
+  if (!inputEl || !dropdownEl) return;
+  let hi = -1;
+
+  function render(filter = "") {
+    const q = filter.trim().toLowerCase();
+    const filtered = q ? options.filter(o => o.toLowerCase().includes(q)) : options;
+    const currentVal = inputEl.value.trim();
+
+    if (!filtered.length) {
+      dropdownEl.innerHTML = `<div style="padding:10px 14px;font-size:12.5px;color:var(--texto-suave);text-align:center">No hay coincidencias (puedes escribir texto libre)</div>`;
+    } else {
+      dropdownEl.innerHTML = filtered.map((opt, i) => {
+        const isSelected = opt.toLowerCase() === currentVal.toLowerCase();
+        return `
+          <div class="combo-option ${isSelected ? "selected" : ""}" data-i="${i}" data-val="${esc(opt)}">
+            <span>${esc(opt)}</span>
+            ${isSelected ? `<span style="color:var(--teal-600);font-size:13px;font-weight:bold">✓</span>` : ""}
+          </div>
+        `;
+      }).join("");
+    }
+    hi = -1;
+  }
+
+  function open() {
+    render(inputEl.value);
+    dropdownEl.classList.add("show");
+  }
+
+  function close() {
+    dropdownEl.classList.remove("show");
+    hi = -1;
+  }
+
+  function toggle() {
+    if (dropdownEl.classList.contains("show")) {
+      close();
+    } else {
+      render("");
+      dropdownEl.classList.add("show");
+      inputEl.focus();
+    }
+  }
+
+  inputEl.addEventListener("focus", () => open());
+  inputEl.addEventListener("click", () => open());
+  inputEl.addEventListener("input", () => {
+    render(inputEl.value);
+    dropdownEl.classList.add("show");
+  });
+
+  if (arrowBtnEl) {
+    arrowBtnEl.addEventListener("mousedown", e => {
+      e.preventDefault();
+      toggle();
+    });
+  }
+
+  dropdownEl.addEventListener("mousedown", e => {
+    const optEl = e.target.closest(".combo-option");
+    if (!optEl || !optEl.dataset.val) return;
+    e.preventDefault();
+    inputEl.value = optEl.dataset.val;
+    close();
+    inputEl.classList.remove("err");
+    inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+    inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  inputEl.addEventListener("blur", () => setTimeout(close, 200));
+
+  inputEl.addEventListener("keydown", e => {
+    const rows = [...dropdownEl.querySelectorAll(".combo-option")];
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!dropdownEl.classList.contains("show")) { open(); return; }
+      if (!rows.length) return;
+      hi = Math.min(hi + 1, rows.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!rows.length) return;
+      hi = Math.max(hi - 1, 0);
+    } else if (e.key === "Enter") {
+      if (dropdownEl.classList.contains("show") && hi >= 0 && rows[hi] && rows[hi].dataset.val) {
+        e.preventDefault();
+        inputEl.value = rows[hi].dataset.val;
+        close();
+        return;
+      }
+    } else if (e.key === "Escape") {
+      close();
+      return;
+    } else return;
+
+    rows.forEach((r, i) => r.classList.toggle("hi", i === hi));
+    rows[hi] && rows[hi].scrollIntoView({ block: "nearest" });
+  });
+}
+
+/* ============================================================
    INICIALIZACIÓN Y CARGA DE SUPABASE
    ============================================================ */
 const AppInit = {
@@ -1212,25 +1315,23 @@ Views.renderNueva = function (numeroToLoad) {
       <div class="grid g3" style="margin-top:14px">
         <div>
           <label>Tiempo de entrega</label>
-          <input id="f_tiempo" list="opciones_tiempo" value="${esc(source ? source.tiempoEntrega || "Inmediata" : "Inmediata")}" autocomplete="new-password" placeholder="Selecciona o escribe...">
-          <datalist id="opciones_tiempo">
-            <option value="Inmediata">
-            <option value="De 3 a 5 días hábiles">
-            <option value="De 8 a 15 días hábiles">
-            <option value="De 15 a 20 días hábiles">
-            <option value="De 20 a 30 días hábiles">
-          </datalist>
+          <div class="combo-field">
+            <input id="f_tiempo" value="${esc(source ? source.tiempoEntrega || "" : "")}" placeholder="Selecciona o escribe..." autocomplete="off">
+            <div class="combo-arrow-btn" id="btn_arrow_tiempo" title="Ver opciones">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div class="combo-dropdown" id="dropdown_tiempo"></div>
+          </div>
         </div>
         <div>
           <label>Forma de pago</label>
-          <input id="f_pago" list="opciones_pago" value="${esc(source ? source.formaPago || "Contado" : "Contado")}" autocomplete="new-password" placeholder="Selecciona o escribe...">
-          <datalist id="opciones_pago">
-            <option value="Contado">
-            <option value="Crédito 15 días">
-            <option value="Crédito 30 días">
-            <option value="Crédito 60 días">
-            <option value="50% Anticipo, 50% Contraentrega">
-          </datalist>
+          <div class="combo-field">
+            <input id="f_pago" value="${esc(source ? source.formaPago || "" : "")}" placeholder="Selecciona o escribe..." autocomplete="off">
+            <div class="combo-arrow-btn" id="btn_arrow_pago" title="Ver opciones">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div class="combo-dropdown" id="dropdown_pago"></div>
+          </div>
         </div>
         <div><label>Validez de la oferta</label><input id="f_validez" value="${esc(source ? source.validez || "15 días" : "15 días")}"></div>
       </div>
@@ -1298,6 +1399,29 @@ Views.renderNueva = function (numeroToLoad) {
       document.getElementById("f_nit").value = c.nit || "";
       document.getElementById("f_ciudad").value = c.ciudad || "";
     }
+  );
+
+  attachDropdownCombo(
+    document.getElementById("f_tiempo"),
+    document.getElementById("dropdown_tiempo"),
+    document.getElementById("btn_arrow_tiempo"),
+    [
+      "De 2 a 3 días hábiles",
+      "De 3 a 5 días hábiles",
+      "De 6 a 10 días hábiles",
+      "Inmediata"
+    ]
+  );
+
+  attachDropdownCombo(
+    document.getElementById("f_pago"),
+    document.getElementById("dropdown_pago"),
+    document.getElementById("btn_arrow_pago"),
+    [
+      "Credito",
+      "Contado",
+      "50% Anticipo, 50% Contraentrega"
+    ]
   );
 };
 
@@ -1602,7 +1726,7 @@ const Cotizador = {
       return toast("No se pudo generar el PDF: " + e.message, true);
     }
 
-    const filename = `Cotizacion_${record.numero}.pdf`;
+    const filename = `${record.numero}.pdf`;
 
     // Subir a Supabase Storage (acceso compartido todos los usuarios)
     const sb = getSb();
@@ -1617,9 +1741,9 @@ const Cotizador = {
     // Guardar en carpeta local (File System Access API) o descarga normal
     const savedToFolder = await FolderSaver.saveBlob(blob, filename);
     if (savedToFolder) {
-      toast(`✅ PDF guardado en tu carpeta configurada`);
+      toast(`✅ PDF ${filename} guardado en tu carpeta configurada`);
     } else {
-      toast(`PDF de cotización ${record.numero} descargado`);
+      toast(`PDF ${filename} descargado`);
     }
   }
 };
@@ -1731,9 +1855,9 @@ const PdfBuilder = {
 
     // 3. CONDICIONES COMERCIALES
     const termsCells = [
-      { label: "TIEMPO DE ENTREGA", value: r.tiempoEntrega || "Inmediata", w: contentW * 0.34 },
-      { label: "FORMA DE PAGO", value: r.formaPago || "Contado", w: contentW * 0.33 },
-      { label: "VALIDEZ DE LA OFERTA", value: r.validez || "30 días", w: contentW * 0.33 }
+      { label: "TIEMPO DE ENTREGA", value: r.tiempoEntrega || "—", w: contentW * 0.34 },
+      { label: "FORMA DE PAGO", value: r.formaPago || "—", w: contentW * 0.33 },
+      { label: "VALIDEZ DE LA OFERTA", value: r.validez || "15 días", w: contentW * 0.33 }
     ];
     y = this.renderPanel(doc, termsCells, M, y, contentW, bgPanel, border, labelKey, textDark);
     y += 14;
