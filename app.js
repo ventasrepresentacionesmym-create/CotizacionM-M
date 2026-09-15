@@ -23,12 +23,18 @@ function getSb() {
    - Siguientes veces: guarda directo sin preguntar
    - Fallback: descarga normal si el navegador no soporta la API
    ============================================================ */
+/* ============================================================
+   FOLDER SAVER — Guarda PDFs en carpeta local via File System Access API
+   - Primera vez: muestra selector de carpeta
+   - Siguientes veces: guarda directo sin preguntar
+   - Fallback: descarga normal si el navegador no soporta la API
+   ============================================================ */
 const FolderSaver = {
   DB_NAME: "CotizadorFS",
   DB_STORE: "handles",
   DB_KEY: "pdfFolder",
 
-  // Abre (o crea) la base IndexedDB donde guardamos el handle de la carpeta
+  // Abre (o crea) la base IndexedDB donde guardamos los handles de carpetas
   _openIDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(this.DB_NAME, 1);
@@ -38,36 +44,48 @@ const FolderSaver = {
     });
   },
 
-  async _getHandle() {
+  async _getGenericHandle(key) {
     try {
       const db = await this._openIDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(this.DB_STORE, "readonly");
-        const req = tx.objectStore(this.DB_STORE).get(this.DB_KEY);
+        const req = tx.objectStore(this.DB_STORE).get(key);
         req.onsuccess = e => resolve(e.target.result || null);
         req.onerror = e => reject(e.target.error);
       });
     } catch { return null; }
   },
 
-  async _saveHandle(handle) {
+  async _saveGenericHandle(key, handle) {
     try {
       const db = await this._openIDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(this.DB_STORE, "readwrite");
-        const req = tx.objectStore(this.DB_STORE).put(handle, this.DB_KEY);
+        const req = tx.objectStore(this.DB_STORE).put(handle, key);
         req.onsuccess = () => resolve();
         req.onerror = e => reject(e.target.error);
       });
     } catch { /* silencioso */ }
   },
 
+  async _getHandle() {
+    return await this._getGenericHandle(this.DB_KEY);
+  },
+
+  async _saveHandle(handle) {
+    return await this._saveGenericHandle(this.DB_KEY, handle);
+  },
+
   // Verifica que el permiso sigue vigente; si no, lo re-solicita
-  async _verifyPermission(handle) {
-    const opts = { writable: true };
-    if ((await handle.queryPermission(opts)) === "granted") return true;
-    if ((await handle.requestPermission(opts)) === "granted") return true;
-    return false;
+  async _verifyPermission(handle, mode = "readwrite") {
+    try {
+      const opts = { mode };
+      if ((await handle.queryPermission(opts)) === "granted") return true;
+      if ((await handle.requestPermission(opts)) === "granted") return true;
+      return false;
+    } catch {
+      return false;
+    }
   },
 
   // API pública: guarda el blob en la carpeta elegida
@@ -82,7 +100,7 @@ const FolderSaver = {
     let dirHandle = await this._getHandle();
 
     // Si no hay carpeta guardada o el permiso venció → pedir carpeta
-    if (!dirHandle || !(await this._verifyPermission(dirHandle))) {
+    if (!dirHandle || !(await this._verifyPermission(dirHandle, "readwrite"))) {
       try {
         dirHandle = await window.showDirectoryPicker({
           id: "cotizaciones-pdf",
@@ -134,11 +152,214 @@ const FolderSaver = {
         startIn: "documents"
       });
       await this._saveHandle(dirHandle);
-      toast(`✅ Carpeta configurada: ${dirHandle.name}`);
+      toast(`✅ Carpeta PDF configurada: ${dirHandle.name}`);
     } catch { /* cancelado */ }
   }
 };
 window.FolderSaver = FolderSaver;
+
+/* ============================================================
+   DATA SYNC — Sincronización desde Carpeta Dropbox o Archivos Locales
+   ============================================================ */
+const DataSync = {
+  DB_KEY: "dataFolder",
+
+  async getSavedFolder() {
+    return await FolderSaver._getGenericHandle(this.DB_KEY);
+  },
+
+  async setSavedFolder(handle) {
+    return await FolderSaver._saveGenericHandle(this.DB_KEY, handle);
+  },
+
+  async pickFolder() {
+    if (!("showDirectoryPicker" in window)) {
+      throw new Error("Tu navegador no soporta seleccionar carpetas directamente. Usa el selector de archivos manual.");
+    }
+    const handle = await window.showDirectoryPicker({
+      id: "cotizaciones-datos",
+      mode: "read",
+      startIn: "documents"
+    });
+    await this.setSavedFolder(handle);
+    return handle;
+  },
+
+  parseHtmlRows(html) {
+    const trBlocks = html.split(/<tr[^>]*>/i);
+    const result = [];
+    for (let b = 1; b < trBlocks.length; b++) {
+      const block = trBlocks[b];
+      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<td|$)/gi)];
+      if (!tdMatches.length) continue;
+      result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
+    }
+    return result;
+  },
+
+  parseProductos(html) {
+    const rows = this.parseHtmlRows(html);
+    const mapProd = new Map();
+    for (const cells of rows) {
+      if (cells.length < 13) continue;
+      const colA = cells[0], colB = cells[1], colD = cells[3], colM = cells[12];
+      if (!colB || /^TOTAL/i.test(colA) || /TOTAL/i.test(colB)) continue;
+      if (!colA.includes("|")) continue;
+      const codigo = colA.split("|")[0].trim();
+      if (!codigo) continue;
+      const ivaPct = (colD && (colD.startsWith("B") || colD.includes("19"))) ? 0.19 : 0;
+      const costo = Number(String(colM || "").replace(/\./g, "").replace(",", ".")) || 0;
+      const proveedor = cells[4] || "";
+
+      if (!mapProd.has(codigo)) {
+        mapProd.set(codigo, { codigo, descripcion: colB, iva_pct: ivaPct, existencia: 0, costo, proveedor });
+      } else {
+        const ex = mapProd.get(codigo);
+        if (costo > ex.costo) {
+          ex.costo = costo;
+          if (!ex.proveedor && proveedor) ex.proveedor = proveedor;
+        }
+      }
+    }
+    return Array.from(mapProd.values());
+  },
+
+  parseClientes(html) {
+    const rows = this.parseHtmlRows(html);
+    const clientes = [];
+    for (const cells of rows) {
+      if (cells.length < 6) continue;
+      let nombre = (cells[1] || "").replace(/^[,"\s]+/, "").trim();
+      const ciudad = (cells[3] || "").trim();
+      const nit = (cells[5] || "").trim();
+      if (!nombre) continue;
+      clientes.push({ nombre, ciudad, nit });
+    }
+    return clientes;
+  },
+
+  async readFileFromHandle(fileHandle) {
+    const file = await fileHandle.getFile();
+    const buffer = await file.arrayBuffer();
+    return new TextDecoder("iso-8859-1").decode(buffer);
+  },
+
+  async readFileFromInput(file) {
+    const buffer = await file.arrayBuffer();
+    return new TextDecoder("iso-8859-1").decode(buffer);
+  },
+
+  async syncFromFolder(onProgress) {
+    let dirHandle = await this.getSavedFolder();
+    if (!dirHandle || !(await FolderSaver._verifyPermission(dirHandle, "read"))) {
+      dirHandle = await this.pickFolder();
+    }
+
+    onProgress({ pct: 5, msg: `Buscando archivos en carpeta "${dirHandle.name}"...` });
+
+    let fileHandleProd = null;
+    let fileHandleClie = null;
+
+    try {
+      fileHandleProd = await dirHandle.getFileHandle("Resumen_de_existencias_UC.xls");
+    } catch {
+      for await (const [name, handle] of dirHandle.entries()) {
+        if (handle.kind === "file" && /resumen.*existencias.*\.xls/i.test(name)) {
+          fileHandleProd = handle;
+          break;
+        }
+      }
+    }
+
+    try {
+      fileHandleClie = await dirHandle.getFileHandle("Directorio.xls");
+    } catch {
+      for await (const [name, handle] of dirHandle.entries()) {
+        if (handle.kind === "file" && /directorio.*\.xls/i.test(name)) {
+          fileHandleClie = handle;
+          break;
+        }
+      }
+    }
+
+    if (!fileHandleProd) {
+      throw new Error(`No se encontró el archivo "Resumen_de_existencias_UC.xls" en la carpeta "${dirHandle.name}".`);
+    }
+    if (!fileHandleClie) {
+      throw new Error(`No se encontró el archivo "Directorio.xls" en la carpeta "${dirHandle.name}".`);
+    }
+
+    onProgress({ pct: 15, msg: "Leyendo archivos de Excel..." });
+    const htmlProd = await this.readFileFromHandle(fileHandleProd);
+    const htmlClie = await this.readFileFromHandle(fileHandleClie);
+
+    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
+  },
+
+  async syncFromFiles(fileProd, fileClie, onProgress) {
+    onProgress({ pct: 10, msg: "Leyendo archivos seleccionados..." });
+    const htmlProd = await this.readFileFromInput(fileProd);
+    const htmlClie = await this.readFileFromInput(fileClie);
+    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
+  },
+
+  async uploadToSupabase(htmlProd, htmlClie, onProgress) {
+    const sb = getSb();
+    if (!sb) throw new Error("No hay conexión con Supabase.");
+
+    onProgress({ pct: 20, msg: "Procesando productos y clientes..." });
+    const productos = this.parseProductos(htmlProd);
+    const clientes = this.parseClientes(htmlClie);
+
+    if (!productos.length) throw new Error("No se encontraron productos válidos en el archivo de existencias.");
+    if (!clientes.length) throw new Error("No se encontraron clientes válidos en el archivo de directorio.");
+
+    onProgress({ pct: 30, msg: "Preparando base de datos en la nube..." });
+    await sb.from("productos").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    await sb.from("clientes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+    const totalRecords = productos.length + clientes.length;
+    let processedRecords = 0;
+    const chunk = 500;
+
+    // Subir productos
+    for (let i = 0; i < productos.length; i += chunk) {
+      const slice = productos.slice(i, i + chunk);
+      const { error } = await sb.from("productos").insert(slice);
+      if (error) throw new Error("Error subiendo productos a Supabase: " + error.message);
+      processedRecords += slice.length;
+      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
+      onProgress({
+        pct,
+        msg: `Subiendo productos (${Math.min(i + chunk, productos.length).toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
+      });
+    }
+
+    // Subir clientes
+    for (let i = 0; i < clientes.length; i += chunk) {
+      const slice = clientes.slice(i, i + chunk);
+      const { error } = await sb.from("clientes").insert(slice);
+      if (error) throw new Error("Error subiendo clientes a Supabase: " + error.message);
+      processedRecords += slice.length;
+      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
+      onProgress({
+        pct,
+        msg: `Subiendo clientes (${Math.min(i + chunk, clientes.length).toLocaleString("es-CO")}/${clientes.length.toLocaleString("es-CO")})...`
+      });
+    }
+
+    onProgress({ pct: 95, msg: "Recargando catálogo actualizado..." });
+    await AppInit.boot();
+    onProgress({ pct: 100, msg: "✅ ¡Base de datos actualizada con éxito!" });
+
+    return {
+      productos: productos.length,
+      clientes: clientes.length
+    };
+  }
+};
+window.DataSync = DataSync;
+
 
 
 let STATE = {
@@ -435,12 +656,19 @@ if (document.readyState === "loading") {
    ============================================================ */
 const Views = {};
 
-/* ---------- 📊 ACTUALIZAR DATOS (RESUMEN EXCLUSIVO) ---------- */
-Views.renderActualizarExcel = function () {
+/* ---------- 📊 ACTUALIZAR DATOS (SINCRONIZACIÓN Y RESUMEN) ---------- */
+Views.renderActualizarExcel = async function () {
   const el = document.getElementById("view-actualizar-excel");
   const totalProd = (STATE.datos || []).length;
   const totalClie = ((STATE.cyp && STATE.cyp.clientes) || []).length;
   const fechaStr = formatFechaHora(STATE.lastUpdate);
+
+  const hasFSA = ("showDirectoryPicker" in window);
+  let savedFolder = null;
+  if (hasFSA) {
+    try { savedFolder = await DataSync.getSavedFolder(); } catch {}
+  }
+  const folderName = savedFolder ? savedFolder.name : null;
 
   el.innerHTML = `
     <div class="section-head">
@@ -471,36 +699,172 @@ Views.renderActualizarExcel = function () {
         </div>
       </div>
 
-      <div style="margin-top:20px;padding:14px 16px;background:#f8fafc;border-radius:8px;border:1px solid var(--linea);font-size:13px;color:var(--texto);line-height:1.5">
-        ℹ️ <b>¿Cómo actualizar la base de datos?</b><br>
-        Descarga los archivos <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en la carpeta <code>Cotizacion nueva</code> de tu computador y haz doble clic en el archivo <b><code>actualizar.bat</code></b>.
-      </div>
+      <!-- Sincronizador Web desde Dropbox / Carpeta Local -->
+      <div class="sync-card">
+        <div class="sync-title">
+          <span>⚡ Actualizar desde Dropbox / Carpeta Local</span>
+          ${folderName ? `<span class="sync-folder-info" id="badgeFolderName">📁 Carpeta: ${esc(folderName)}</span>` : `<span class="sync-folder-info" id="badgeFolderName" style="display:none"></span>`}
+        </div>
+        <div class="sync-desc">
+          Coloca los archivos <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en la carpeta compartida y presiona el botón para sincronizar la base de datos de inmediato.
+        </div>
 
-      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-accent" id="btnReloadSupabase">🔄 Recargar datos desde Supabase</button>
+        <div class="sync-progress-wrap" id="syncProgressWrap">
+          <div class="sync-progress-bar" id="syncProgressBar"></div>
+        </div>
+        <div class="sync-status-msg" id="syncStatusMsg"></div>
+
+        <div class="sync-actions">
+          ${hasFSA ? `
+            <button class="btn btn-accent" id="btnSyncFolder" style="padding:10px 18px;font-size:13.5px">
+              ⚡ Sincronizar desde carpeta Dropbox
+            </button>
+            <button class="btn btn-ghost" id="btnChangeDataFolder" title="Cambiar la carpeta de origen">
+              📁 Cambiar carpeta
+            </button>
+          ` : ""}
+          <label class="btn btn-ghost" style="cursor:pointer;margin:0" title="Selecciona los 2 archivos XLS manualmente">
+            📄 Subir archivos Excel manualmente
+            <input type="file" id="manualFileInput" multiple accept=".xls,.html,.xlsx" style="display:none">
+          </label>
+          <button class="btn btn-ghost" id="btnReloadSupabase" style="margin-left:auto">🔄 Recargar datos</button>
+        </div>
       </div>
     </div>
   `;
 
-  document.getElementById("btnReloadSupabase").addEventListener("click", async () => {
-    const btn = document.getElementById("btnReloadSupabase");
-    btn.disabled = true;
-    btn.textContent = "Recargando...";
-    try {
-      await AppInit.boot();
-      const pCount = (STATE.datos || []).length;
-      const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
-      document.getElementById("metricProd").textContent = pCount.toLocaleString("es-CO");
-      document.getElementById("metricClie").textContent = cCount.toLocaleString("es-CO");
-      document.getElementById("metricFecha").textContent = formatFechaHora(STATE.lastUpdate);
-      toast(`Datos recargados: ${pCount} productos y ${cCount} clientes.`);
-    } catch (e) {
-      toast("Error al conectar con la nube: " + e.message, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "🔄 Recargar datos desde Supabase";
+  const progressWrap = document.getElementById("syncProgressWrap");
+  const progressBar = document.getElementById("syncProgressBar");
+  const statusMsg = document.getElementById("syncStatusMsg");
+  const btnSync = document.getElementById("btnSyncFolder");
+  const btnChange = document.getElementById("btnChangeDataFolder");
+  const btnReload = document.getElementById("btnReloadSupabase");
+  const manualInput = document.getElementById("manualFileInput");
+
+  function showProgress(pct, msg) {
+    if (progressWrap) progressWrap.style.display = "block";
+    if (progressBar) progressBar.style.width = pct + "%";
+    if (statusMsg) {
+      statusMsg.style.display = "block";
+      statusMsg.textContent = msg;
     }
-  });
+  }
+
+  function hideProgress() {
+    setTimeout(() => {
+      if (progressWrap) progressWrap.style.display = "none";
+      if (statusMsg) statusMsg.style.display = "none";
+    }, 4000);
+  }
+
+  function refreshMetrics() {
+    const pCount = (STATE.datos || []).length;
+    const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
+    document.getElementById("metricProd").textContent = pCount.toLocaleString("es-CO");
+    document.getElementById("metricClie").textContent = cCount.toLocaleString("es-CO");
+    document.getElementById("metricFecha").textContent = formatFechaHora(STATE.lastUpdate);
+  }
+
+  // Sincronización desde Carpeta (Dropbox)
+  if (btnSync) {
+    btnSync.addEventListener("click", async () => {
+      btnSync.disabled = true;
+      if (btnChange) btnChange.disabled = true;
+      if (btnReload) btnReload.disabled = true;
+
+      try {
+        const result = await DataSync.syncFromFolder(({ pct, msg }) => showProgress(pct, msg));
+        refreshMetrics();
+        toast(`✅ ¡Éxito! Sincronizados ${result.productos.toLocaleString("es-CO")} productos y ${result.clientes.toLocaleString("es-CO")} clientes.`);
+        // Actualizar badge de carpeta
+        const saved = await DataSync.getSavedFolder();
+        if (saved && document.getElementById("badgeFolderName")) {
+          const b = document.getElementById("badgeFolderName");
+          b.textContent = `📁 Carpeta: ${saved.name}`;
+          b.style.display = "inline-flex";
+        }
+      } catch (err) {
+        console.error("Error en sincronización:", err);
+        showProgress(100, "❌ " + err.message);
+        toast(err.message, true);
+      } finally {
+        btnSync.disabled = false;
+        if (btnChange) btnChange.disabled = false;
+        if (btnReload) btnReload.disabled = false;
+        hideProgress();
+      }
+    });
+  }
+
+  // Cambiar Carpeta
+  if (btnChange) {
+    btnChange.addEventListener("click", async () => {
+      try {
+        const handle = await DataSync.pickFolder();
+        const b = document.getElementById("badgeFolderName");
+        if (b) {
+          b.textContent = `📁 Carpeta: ${handle.name}`;
+          b.style.display = "inline-flex";
+        }
+        toast(`✅ Carpeta configurada: ${handle.name}`);
+      } catch (e) {
+        if (e.name !== "AbortError") toast(e.message, true);
+      }
+    });
+  }
+
+  // Subir archivos manualmente (.xls)
+  if (manualInput) {
+    manualInput.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+
+      const fileProd = files.find(f => /resumen.*existencias/i.test(f.name) || /existencias/i.test(f.name));
+      const fileClie = files.find(f => /directorio/i.test(f.name) || /clientes/i.test(f.name));
+
+      if (!fileProd || !fileClie) {
+        return toast("Debes seleccionar ambos archivos: 'Resumen_de_existencias_UC.xls' y 'Directorio.xls'", true);
+      }
+
+      if (btnSync) btnSync.disabled = true;
+      if (btnReload) btnReload.disabled = true;
+
+      try {
+        const result = await DataSync.syncFromFiles(fileProd, fileClie, ({ pct, msg }) => showProgress(pct, msg));
+        refreshMetrics();
+        toast(`✅ ¡Éxito! Sincronizados ${result.productos.toLocaleString("es-CO")} productos y ${result.clientes.toLocaleString("es-CO")} clientes.`);
+      } catch (err) {
+        console.error("Error en subida manual:", err);
+        showProgress(100, "❌ " + err.message);
+        toast(err.message, true);
+      } finally {
+        if (btnSync) btnSync.disabled = false;
+        if (btnReload) btnReload.disabled = false;
+        manualInput.value = "";
+        hideProgress();
+      }
+    });
+  }
+
+  // Recargar desde Supabase
+  if (btnReload) {
+    btnReload.addEventListener("click", async () => {
+      btnReload.disabled = true;
+      btnReload.textContent = "Recargando...";
+      try {
+        await AppInit.boot();
+        refreshMetrics();
+        const pCount = (STATE.datos || []).length;
+        const cCount = ((STATE.cyp && STATE.cyp.clientes) || []).length;
+        toast(`Datos recargados: ${pCount.toLocaleString("es-CO")} productos y ${cCount.toLocaleString("es-CO")} clientes.`);
+      } catch (e) {
+        toast("Error al conectar con la nube: " + e.message, true);
+      } finally {
+        btnReload.disabled = false;
+        btnReload.textContent = "🔄 Recargar datos";
+      }
+    });
+  }
 };
 
 /* ---------- 👤 ASESORES ---------- */
