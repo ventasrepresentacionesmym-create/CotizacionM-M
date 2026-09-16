@@ -636,6 +636,13 @@ function attachDropdownCombo(inputEl, dropdownEl, arrowBtnEl, options) {
   });
 }
 
+// Deshabilitar modificación de valores numéricos con el scroll / rueda del mouse
+window.addEventListener("wheel", function (e) {
+  if (document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.type === "number") {
+    document.activeElement.blur();
+  }
+}, { passive: true });
+
 /* ============================================================
    INICIALIZACIÓN Y CARGA DE SUPABASE
    ============================================================ */

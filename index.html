@@ -84,6 +84,16 @@ input.err,select.err{border-color:#c0442c;box-shadow:0 0 0 3px rgba(192,68,44,.1
 textarea{resize:vertical;min-height:90px;}
 .field{position:relative;}
 
+/* Deshabilitar incremento por flechas nativas en inputs de número */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
 /* Combo select dropdown profesional */
 .combo-field{position:relative;width:100%;}
 .combo-field input{padding-right:34px;cursor:pointer;}
@@ -227,6 +237,6 @@ textarea{resize:vertical;min-height:90px;}
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20260915_v3"></script>
+<script src="app.js?v=20260916_v1"></script>
 </body>
 </html>
