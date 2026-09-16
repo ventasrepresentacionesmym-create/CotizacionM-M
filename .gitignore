@@ -17,3 +17,7 @@ cyp.json
 datos.json
 Editable/
 PDF/
+*.pdf
+*.xls
+*.xlsx
+*.xlsm
