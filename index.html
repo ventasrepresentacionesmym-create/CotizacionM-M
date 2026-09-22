@@ -143,12 +143,57 @@ input[type=number] {
 .items-table-wrap{overflow:visible;position:relative;width:100%;}
 .items-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}
 .items-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--azul-950);font-weight:700;border-bottom:2px solid var(--linea);padding:10px 6px;background:#f8fafc;}
-.items-table td{padding:7px 5px;border-bottom:1px solid #f1f5f9;vertical-align:middle;position:relative;}
+.items-table td{padding:6px 4px;border-bottom:1px solid #f1f5f9;vertical-align:middle;position:relative;}
 .items-table input{padding:7px 8px;font-size:12.5px;width:100%;box-sizing:border-box;}
 .items-table .num{text-align:right;font-family:var(--mono);font-weight:600;color:var(--azul-950);font-size:12.5px;}
-.items-table .rm{background:none;border:none;color:var(--texto-suave);cursor:pointer;font-size:16px;padding:5px 7px;border-radius:6px;transition:.15s;}
-.items-table .rm:hover{background:#fef2f2;color:#dc2626;}
-.col-cod{width:11%;}.col-desc{width:29%;}.col-cant{width:6%;}.col-vu{width:10%;}.col-iva{width:6%;}.col-vi{width:9%;}.col-vt{width:10%;}.col-util{width:6%;}.col-costo{width:9%;}.col-prov{width:9%;}.col-rm{width:3.5%;text-align:center;}
+
+/* Columnas normales (sin columna de imagen) */
+.col-num{width:3.5%;text-align:center;font-weight:700;color:var(--azul-950);font-family:var(--mono);}
+.col-cod{width:11%;}
+.col-desc{width:27%;}
+.col-cant{width:5.5%;}
+.col-vu{width:10%;}
+.col-iva{width:5.5%;}
+.col-vi{width:9%;}
+.col-vt{width:10%;}
+.col-util{width:5.5%;}
+.col-costo{width:8.5%;}
+.col-prov{width:8.5%;}
+.col-act{width:6%;text-align:center;}
+
+/* Columnas cuando la imagen está activada */
+.table-with-img .col-num{width:3.2%;text-align:center;font-weight:700;color:var(--azul-950);font-family:var(--mono);}
+.table-with-img .col-img{width:6.8%;text-align:center;}
+.table-with-img .col-cod{width:10%;}
+.table-with-img .col-desc{width:21.5%;}
+.table-with-img .col-cant{width:5%;}
+.table-with-img .col-vu{width:9.5%;}
+.table-with-img .col-iva{width:5%;}
+.table-with-img .col-vi{width:8.5%;}
+.table-with-img .col-vt{width:9.5%;}
+.table-with-img .col-util{width:5%;}
+.table-with-img .col-costo{width:8%;}
+.table-with-img .col-prov{width:8%;}
+.table-with-img .col-act{width:6.5%;text-align:center;}
+
+/* Miniatura y carga de imagen */
+.img-cell-box{display:flex;align-items:center;justify-content:center;}
+.img-thumb-box{display:inline-flex;align-items:center;justify-content:center;position:relative;width:44px;height:36px;border-radius:6px;background:#f8fafc;border:1px dashed #cbd5e1;cursor:pointer;overflow:hidden;transition:all .15s ease;margin:0 auto;}
+.img-thumb-box:hover{border-color:var(--teal-600);background:#f0f9fa;}
+.img-thumb-box.has-img{border-style:solid;border-color:#cbd5e1;background:#fff;}
+.img-thumb-preview{max-width:100%;max-height:100%;object-fit:contain;display:block;}
+.img-thumb-placeholder{font-size:15px;color:#94a3b8;line-height:1;display:flex;align-items:center;justify-content:center;}
+.img-thumb-remove{position:absolute;top:1px;right:1px;width:15px;height:15px;background:rgba(220,38,38,.88);color:#fff;border-radius:50%;display:none;align-items:center;justify-content:center;font-size:9px;border:none;cursor:pointer;line-height:1;}
+.img-thumb-box.has-img:hover .img-thumb-remove{display:flex;}
+.img-thumb-remove:hover{background:#dc2626;}
+
+/* Botones de acción de fila (+ insertar y ✕ eliminar) */
+.row-actions{display:flex;align-items:center;justify-content:center;gap:3px;}
+.btn-row-act{background:#fff;border:1px solid var(--linea);border-radius:5px;cursor:pointer;font-size:13px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:all .15s ease;font-weight:700;}
+.btn-row-act.btn-insert{color:var(--teal-700);border-color:#bbf7d0;background:#f0fdf4;}
+.btn-row-act.btn-insert:hover{background:#dcfce7;border-color:#86efac;color:#15803d;transform:scale(1.08);}
+.btn-row-act.btn-remove{color:#94a3b8;border-color:var(--linea);}
+.btn-row-act.btn-remove:hover{background:#fef2f2;border-color:#fecaca;color:#dc2626;}
 
 .totals{display:flex;justify-content:flex-end;margin-top:14px;}
 .totals table{font-size:14px;}
@@ -237,6 +282,6 @@ input[type=number] {
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20260916_v1"></script>
+<script src="app.js?v=20260922_v2"></script>
 </body>
 </html>

@@ -367,7 +367,10 @@ let STATE = {
   cyp: { clientes: [], asesores: [] },
   cotizaciones: [],
   seq: {},
-  lastUpdate: null
+  lastUpdate: null,
+  config: {
+    showImages: false
+  }
 };
 
 let DRAFT = null;
@@ -383,7 +386,13 @@ function loadStateLocal() {
     const raw = localStorage.getItem("cotizador_state_cache");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") STATE = { ...STATE, ...parsed };
+      if (parsed && typeof parsed === "object") {
+        STATE = {
+          ...STATE,
+          ...parsed,
+          config: { ...(STATE.config || { showImages: false }), ...(parsed.config || {}) }
+        };
+      }
     }
   } catch (e) {}
 }
@@ -459,6 +468,84 @@ function formatFechaHora(isoStr) {
     return "Sin registros previos";
   }
 }
+
+/* ---------- IMAGE HELPER (Archivos, Portapapeles, Google Images) ---------- */
+const ImageHelper = {
+  fileToDataUrl(file, maxWidth = 500, maxHeight = 500) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject(new Error("No file"));
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const rawUrl = e.target.result;
+        const img = new Image();
+        img.onload = () => {
+          let w = img.width || 100;
+          let h = img.height || 100;
+          if (w > maxWidth || h > maxHeight) {
+            const ratio = Math.min(maxWidth / w, maxHeight / h);
+            w = Math.round(w * ratio);
+            h = Math.round(h * ratio);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, w);
+          canvas.height = Math.max(1, h);
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+          resolve(dataUrl);
+        };
+        img.onerror = () => resolve(rawUrl);
+        img.src = rawUrl;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  },
+
+  async handlePasteEvent(e, onImageExtracted) {
+    const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            e.preventDefault();
+            e.stopPropagation();
+            const dataUrl = await this.fileToDataUrl(blob);
+            onImageExtracted(dataUrl);
+            return true;
+          }
+        }
+      }
+    }
+    const pastedText = (e.clipboardData || window.clipboardData)?.getData("text");
+    if (pastedText && /^https?:\/\/.*\.(png|jpg|jpeg|webp|gif|svg)(\?.*)?$/i.test(pastedText.trim())) {
+      e.preventDefault();
+      e.stopPropagation();
+      const url = pastedText.trim();
+      const img = new Image();
+      img.crossOrigin = "Anonymous";
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          onImageExtracted(canvas.toDataURL("image/jpeg", 0.88));
+        } catch (err) {
+          onImageExtracted(url);
+        }
+      };
+      img.onerror = () => onImageExtracted(url);
+      img.src = url;
+      return true;
+    }
+    return false;
+  }
+};
 
 /* ============================================================
    ROUTER
@@ -1288,6 +1375,9 @@ Views.renderNueva = function (numeroToLoad) {
   const numeroDisplay = isEdit ? existing.numero : "Se asigna al guardar";
   const hoy = new Date().toISOString().slice(0, 10);
 
+  const showImages = source && source.showImages !== undefined ? !!source.showImages : (STATE.config && !!STATE.config.showImages);
+  ItemsUI.showImages = showImages;
+
   Cotizador._editingNumero = isEdit ? existing.numero : null;
 
   const defaultObs =
@@ -1348,10 +1438,23 @@ Views.renderNueva = function (numeroToLoad) {
     </div>
 
     <div class="card">
-      <div class="section-head" style="margin-bottom:12px"><h3 style="margin:0;font-size:15px;color:var(--azul-950)">Productos</h3>
-        <button class="btn btn-accent" onclick="ItemsUI.add()">+ Agregar producto</button></div>
-      <div class="items-table-wrap"><table class="items-table">
+      <div class="section-head" style="margin-bottom:12px;align-items:center;">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+          <h3 style="margin:0;font-size:15px;color:var(--azul-950)">Productos</h3>
+          <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--azul-950);cursor:pointer;text-transform:none;margin:0;background:#f1f5f9;padding:5px 12px;border-radius:20px;border:1px solid #cbd5e1;user-select:none;">
+            <input type="checkbox" id="toggle_imagenes" ${showImages ? "checked" : ""} style="width:15px;height:15px;accent-color:var(--teal-700);cursor:pointer;margin:0;">
+            <span>📸 Mostrar columna de imágenes</span>
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="ItemsUI.insertAt(0)" title="Insertar producto al inicio de la tabla">+ Insertar al inicio</button>
+          <button class="btn btn-accent" onclick="ItemsUI.add()">+ Agregar producto</button>
+        </div>
+      </div>
+      <div class="items-table-wrap"><table class="items-table ${showImages ? "table-with-img" : ""}" id="itemsTable">
         <thead><tr>
+          <th class="col-num">N°</th>
+          ${showImages ? '<th class="col-img">Imagen</th>' : ''}
           <th class="col-cod">Código</th>
           <th class="col-desc">Descripción</th>
           <th class="col-cant">Cant.</th>
@@ -1362,7 +1465,7 @@ Views.renderNueva = function (numeroToLoad) {
           <th class="col-util">% Util.</th>
           <th class="col-costo">Costo</th>
           <th class="col-prov">Proveedor</th>
-          <th class="col-rm"></th>
+          <th class="col-act"></th>
         </tr></thead>
         <tbody id="itemsBody"></tbody>
       </table></div>
@@ -1388,10 +1491,21 @@ Views.renderNueva = function (numeroToLoad) {
     </div>
   `;
 
+  const toggleImg = document.getElementById("toggle_imagenes");
+  if (toggleImg) {
+    toggleImg.addEventListener("change", (e) => {
+      const checked = e.target.checked;
+      STATE.config = STATE.config || {};
+      STATE.config.showImages = checked;
+      persistStateLocal();
+      ItemsUI.setShowImages(checked);
+    });
+  }
+
   if (isEdit && source && source.items && source.items.length) {
     ItemsUI.items = JSON.parse(JSON.stringify(source.items));
   } else {
-    ItemsUI.items = [{ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25 }];
+    ItemsUI.items = [{ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25, proveedor: "", imagen: "" }];
   }
   ItemsUI.paint();
 
@@ -1436,109 +1550,240 @@ Views.renderNueva = function (numeroToLoad) {
 };
 
 /* ---------- ITEMS UI ---------- */
-const ItemsUI = { items: [] };
-ItemsUI.add = function () {
-  this.items.push({ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25 });
-  this.paint();
-};
-ItemsUI.remove = function (i) {
-  this.items.splice(i, 1);
-  if (!this.items.length) {
-    this.items.push({ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25 });
-  }
-  this.paint();
-};
-ItemsUI.paint = function () {
-  const body = document.getElementById("itemsBody");
-  if (!body) return;
+const ItemsUI = {
+  items: [],
+  showImages: false,
 
-  body.innerHTML = this.items.map((it, i) => `
-    <tr>
-      <td>
-        <input class="it-codigo" data-i="${i}" value="${esc(it.codigo)}" placeholder="Código..." autocomplete="off">
-        <div class="ac-list ac-products" id="ac_item_cod_${i}"></div>
-      </td>
-      <td>
-        <input class="it-desc" data-i="${i}" value="${esc(it.descripcion)}" placeholder="Descripción del producto..." autocomplete="off">
-        <div class="ac-list ac-products" id="ac_item_desc_${i}"></div>
-      </td>
-      <td><input class="it-cant num" data-i="${i}" type="number" min="1" step="1" value="${it.cantidad != null ? it.cantidad : 1}"></td>
-      <td><input class="it-vu num" data-i="${i}" type="number" min="0" step="1" value="${Math.round(it.vrUnitario || 0)}"></td>
-      <td><input class="it-iva num" data-i="${i}" type="number" min="0" step="1" value="${Math.round((it.ivaPct || 0) * 100)}"></td>
-      <td class="num" id="it-vi-${i}">${fmtCOP(0)}</td>
-      <td class="num" id="it-vt-${i}">${fmtCOP(0)}</td>
-      <td><input class="it-util num" data-i="${i}" type="number" min="0" step="1" value="${Math.round((it.porcentaje != null ? it.porcentaje : 0.25) * 100)}"></td>
-      <td><input class="it-costo num" data-i="${i}" type="number" min="0" step="1" value="${Math.round(it.costo || 0)}"></td>
-      <td><input class="it-prov" data-i="${i}" value="${esc(it.proveedor || "")}" placeholder="Proveedor"></td>
-      <td style="text-align:center"><button class="rm" onclick="ItemsUI.remove(${i})" title="Eliminar fila">✕</button></td>
-    </tr>
-  `).join("");
-
-  this.items.forEach((it, i) => {
-    const codInput = body.querySelector(`.it-codigo[data-i="${i}"]`);
-    const descInput = body.querySelector(`.it-desc[data-i="${i}"]`);
-    const acCodList = document.getElementById(`ac_item_cod_${i}`);
-    const acDescList = document.getElementById(`ac_item_desc_${i}`);
-
-    const onPickProduct = d => {
-      const util = this.items[i].porcentaje != null ? this.items[i].porcentaje : 0.25;
-      let ivaPct = Number(d[2]) || 0;
-      if (ivaPct > 1) ivaPct = ivaPct / 100;
-      this.items[i].codigo = d[0] || "";
-      this.items[i].descripcion = d[1] || "";
-      this.items[i].ivaPct = ivaPct;
-      this.items[i].costo = Number(d[4]) || 0;
-      this.items[i].proveedor = d[5] || "";
-      this.items[i].porcentaje = util;
-      this.items[i].vrUnitario = Math.round((Number(d[4]) || 0) * (1 + util));
-      this.paint();
-    };
-
-    const renderProductItem = d => `
-      <div class="ac-prod-top">
-        <span class="ac-badge-code">${esc(d[0])}</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <span class="ac-badge-iva">IVA ${Math.round(((Number(d[2]) > 1 ? Number(d[2]) : Number(d[2]) * 100)) || 0)}%</span>
-          ${d[4] ? `<span class="ac-badge-costo">Costo: ${fmtCOP(d[4])}</span>` : ""}
-        </div>
-      </div>
-      <div class="ac-prod-name">${esc(d[1])}</div>
-      ${d[5] ? `<div class="ac-prod-prov">Proveedor: <b>${esc(d[5])}</b></div>` : ""}
-    `;
-
-    const getProducts = q => {
-      const datos = DB.getDatos();
-      return datos.filter(d => (d[0] && norm(d[0]).includes(q)) || (d[1] && norm(d[1]).includes(q)));
-    };
-
-    if (codInput && acCodList) attachAutocomplete(codInput, acCodList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");
-    if (descInput && acDescList) attachAutocomplete(descInput, acDescList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");
-
-    body.querySelector(`.it-desc[data-i="${i}"]`).addEventListener("input", e => { this.items[i].descripcion = e.target.value; });
-    body.querySelector(`.it-codigo[data-i="${i}"]`).addEventListener("input", e => { this.items[i].codigo = e.target.value; });
-    body.querySelector(`.it-cant[data-i="${i}"]`).addEventListener("input", e => { this.items[i].cantidad = parseNum(e.target.value); this.recalc(); });
-    body.querySelector(`.it-vu[data-i="${i}"]`).addEventListener("input", e => { this.items[i].vrUnitario = parseNum(e.target.value); this.recalc(); });
-    body.querySelector(`.it-iva[data-i="${i}"]`).addEventListener("input", e => { this.items[i].ivaPct = parseNum(e.target.value) / 100; this.recalc(); });
-    body.querySelector(`.it-costo[data-i="${i}"]`).addEventListener("input", e => {
-      this.items[i].costo = parseNum(e.target.value);
-      const util = this.items[i].porcentaje != null ? this.items[i].porcentaje : 0.25;
-      this.items[i].vrUnitario = Math.round(this.items[i].costo * (1 + util));
-      const vuInput = body.querySelector(`.it-vu[data-i="${i}"]`);
-      if (vuInput) vuInput.value = this.items[i].vrUnitario;
-      this.recalc();
-    });
-    body.querySelector(`.it-prov[data-i="${i}"]`).addEventListener("input", e => { this.items[i].proveedor = e.target.value; });
-    body.querySelector(`.it-util[data-i="${i}"]`).addEventListener("input", e => {
-      this.items[i].porcentaje = parseNum(e.target.value) / 100;
-      if (this.items[i].costo) {
-        this.items[i].vrUnitario = Math.round(this.items[i].costo * (1 + this.items[i].porcentaje));
-        const vuInput = body.querySelector(`.it-vu[data-i="${i}"]`);
-        if (vuInput) vuInput.value = Math.round(this.items[i].vrUnitario);
+  setShowImages(show) {
+    this.showImages = !!show;
+    const tbl = document.getElementById("itemsTable");
+    if (tbl) {
+      tbl.className = "items-table " + (this.showImages ? "table-with-img" : "");
+      const thead = tbl.querySelector("thead tr");
+      if (thead) {
+        thead.innerHTML = `
+          <th class="col-num">N°</th>
+          ${this.showImages ? '<th class="col-img">Imagen</th>' : ''}
+          <th class="col-cod">Código</th>
+          <th class="col-desc">Descripción</th>
+          <th class="col-cant">Cant.</th>
+          <th class="col-vu">Vr. unit.</th>
+          <th class="col-iva">IVA %</th>
+          <th class="col-vi">Valor IVA</th>
+          <th class="col-vt">Valor total</th>
+          <th class="col-util">% Util.</th>
+          <th class="col-costo">Costo</th>
+          <th class="col-prov">Proveedor</th>
+          <th class="col-act"></th>
+        `;
       }
-      this.recalc();
+    }
+    this.paint();
+  },
+
+  insertAt(index) {
+    const newItem = {
+      codigo: "",
+      descripcion: "",
+      cantidad: 1,
+      vrUnitario: 0,
+      ivaPct: 0.19,
+      costo: 0,
+      porcentaje: 0.25,
+      proveedor: "",
+      imagen: ""
+    };
+    if (typeof index !== "number" || index < 0 || index > this.items.length) {
+      this.items.push(newItem);
+    } else {
+      this.items.splice(index, 0, newItem);
+    }
+    this.paint();
+  },
+
+  add() {
+    this.insertAt(this.items.length);
+  },
+
+  remove(i) {
+    this.items.splice(i, 1);
+    if (!this.items.length) {
+      this.items.push({ codigo: "", descripcion: "", cantidad: 1, vrUnitario: 0, ivaPct: 0.19, costo: 0, porcentaje: 0.25, proveedor: "", imagen: "" });
+    }
+    this.paint();
+  },
+
+  paint() {
+    const body = document.getElementById("itemsBody");
+    if (!body) return;
+
+    body.innerHTML = this.items.map((it, i) => `
+      <tr data-row="${i}">
+        <td class="col-num">${i + 1}</td>
+        ${this.showImages ? `
+          <td class="col-img">
+            <div class="img-cell-box">
+              <input type="file" class="it-file-img" data-i="${i}" accept="image/*,.png,.jpg,.jpeg,.svg,.webp,.gif" style="display:none">
+              <div class="img-thumb-box ${it.imagen ? "has-img" : ""}" data-i="${i}" tabindex="0" title="${it.imagen ? "Clic para cambiar o ✕ para quitar" : "Clic para subir imagen o pega con Ctrl+V"}">
+                ${it.imagen ? `
+                  <img src="${esc(it.imagen)}" class="img-thumb-preview" alt="Foto">
+                  <button type="button" class="img-thumb-remove" data-i="${i}" title="Quitar imagen">✕</button>
+                ` : `
+                  <span class="img-thumb-placeholder">📷</span>
+                `}
+              </div>
+            </div>
+          </td>
+        ` : ''}
+        <td>
+          <input class="it-codigo" data-i="${i}" value="${esc(it.codigo)}" placeholder="Código..." autocomplete="off">
+          <div class="ac-list ac-products" id="ac_item_cod_${i}"></div>
+        </td>
+        <td>
+          <input class="it-desc" data-i="${i}" value="${esc(it.descripcion)}" placeholder="Descripción del producto..." autocomplete="off">
+          <div class="ac-list ac-products" id="ac_item_desc_${i}"></div>
+        </td>
+        <td><input class="it-cant num" data-i="${i}" type="number" min="1" step="1" value="${it.cantidad != null ? it.cantidad : 1}"></td>
+        <td><input class="it-vu num" data-i="${i}" type="number" min="0" step="1" value="${Math.round(it.vrUnitario || 0)}"></td>
+        <td><input class="it-iva num" data-i="${i}" type="number" min="0" step="1" value="${Math.round((it.ivaPct || 0) * 100)}"></td>
+        <td class="num" id="it-vi-${i}">${fmtCOP(0)}</td>
+        <td class="num" id="it-vt-${i}">${fmtCOP(0)}</td>
+        <td><input class="it-util num" data-i="${i}" type="number" min="0" step="1" value="${Math.round((it.porcentaje != null ? it.porcentaje : 0.25) * 100)}"></td>
+        <td><input class="it-costo num" data-i="${i}" type="number" min="0" step="1" value="${Math.round(it.costo || 0)}"></td>
+        <td><input class="it-prov" data-i="${i}" value="${esc(it.proveedor || "")}" placeholder="Proveedor"></td>
+        <td class="col-act">
+          <div class="row-actions">
+            <button type="button" class="btn-row-act btn-insert" onclick="ItemsUI.insertAt(${i + 1})" title="Insertar producto debajo">+</button>
+            <button type="button" class="btn-row-act btn-remove" onclick="ItemsUI.remove(${i})" title="Eliminar fila">✕</button>
+          </div>
+        </td>
+      </tr>
+    `).join("");
+
+    this.items.forEach((it, i) => {
+      const codInput = body.querySelector(`.it-codigo[data-i="${i}"]`);
+      const descInput = body.querySelector(`.it-desc[data-i="${i}"]`);
+      const acCodList = document.getElementById(`ac_item_cod_${i}`);
+      const acDescList = document.getElementById(`ac_item_desc_${i}`);
+
+      const onPickProduct = d => {
+        const util = this.items[i].porcentaje != null ? this.items[i].porcentaje : 0.25;
+        let ivaPct = Number(d[2]) || 0;
+        if (ivaPct > 1) ivaPct = ivaPct / 100;
+        this.items[i].codigo = d[0] || "";
+        this.items[i].descripcion = d[1] || "";
+        this.items[i].ivaPct = ivaPct;
+        this.items[i].costo = Number(d[4]) || 0;
+        this.items[i].proveedor = d[5] || "";
+        this.items[i].porcentaje = util;
+        this.items[i].vrUnitario = Math.round((Number(d[4]) || 0) * (1 + util));
+        this.paint();
+      };
+
+      const renderProductItem = d => `
+        <div class="ac-prod-top">
+          <span class="ac-badge-code">${esc(d[0])}</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="ac-badge-iva">IVA ${Math.round(((Number(d[2]) > 1 ? Number(d[2]) : Number(d[2]) * 100)) || 0)}%</span>
+            ${d[4] ? `<span class="ac-badge-costo">Costo: ${fmtCOP(d[4])}</span>` : ""}
+          </div>
+        </div>
+        <div class="ac-prod-name">${esc(d[1])}</div>
+        ${d[5] ? `<div class="ac-prod-prov">Proveedor: <b>${esc(d[5])}</b></div>` : ""}
+      `;
+
+      const getProducts = q => {
+        const datos = DB.getDatos();
+        return datos.filter(d => (d[0] && norm(d[0]).includes(q)) || (d[1] && norm(d[1]).includes(q)));
+      };
+
+      if (codInput && acCodList) attachAutocomplete(codInput, acCodList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");
+      if (descInput && acDescList) attachAutocomplete(descInput, acDescList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");
+
+      body.querySelector(`.it-desc[data-i="${i}"]`).addEventListener("input", e => { this.items[i].descripcion = e.target.value; });
+      body.querySelector(`.it-codigo[data-i="${i}"]`).addEventListener("input", e => { this.items[i].codigo = e.target.value; });
+      body.querySelector(`.it-cant[data-i="${i}"]`).addEventListener("input", e => { this.items[i].cantidad = parseNum(e.target.value); this.recalc(); });
+      body.querySelector(`.it-vu[data-i="${i}"]`).addEventListener("input", e => { this.items[i].vrUnitario = parseNum(e.target.value); this.recalc(); });
+      body.querySelector(`.it-iva[data-i="${i}"]`).addEventListener("input", e => { this.items[i].ivaPct = parseNum(e.target.value) / 100; this.recalc(); });
+      body.querySelector(`.it-costo[data-i="${i}"]`).addEventListener("input", e => {
+        this.items[i].costo = parseNum(e.target.value);
+        const util = this.items[i].porcentaje != null ? this.items[i].porcentaje : 0.25;
+        this.items[i].vrUnitario = Math.round(this.items[i].costo * (1 + util));
+        const vuInput = body.querySelector(`.it-vu[data-i="${i}"]`);
+        if (vuInput) vuInput.value = this.items[i].vrUnitario;
+        this.recalc();
+      });
+      body.querySelector(`.it-prov[data-i="${i}"]`).addEventListener("input", e => { this.items[i].proveedor = e.target.value; });
+      body.querySelector(`.it-util[data-i="${i}"]`).addEventListener("input", e => {
+        this.items[i].porcentaje = parseNum(e.target.value) / 100;
+        if (this.items[i].costo) {
+          this.items[i].vrUnitario = Math.round(this.items[i].costo * (1 + this.items[i].porcentaje));
+          const vuInput = body.querySelector(`.it-vu[data-i="${i}"]`);
+          if (vuInput) vuInput.value = Math.round(this.items[i].vrUnitario);
+        }
+        this.recalc();
+      });
+
+      // Manejo de imágenes (archivo, clic, pegar)
+      if (this.showImages) {
+        const fileInput = body.querySelector(`.it-file-img[data-i="${i}"]`);
+        const thumbBox = body.querySelector(`.img-thumb-box[data-i="${i}"]`);
+        const rmBtn = body.querySelector(`.img-thumb-remove[data-i="${i}"]`);
+        const rowEl = body.querySelector(`tr[data-row="${i}"]`);
+
+        if (fileInput) {
+          fileInput.addEventListener("change", async (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (file) {
+              try {
+                const dataUrl = await ImageHelper.fileToDataUrl(file);
+                this.items[i].imagen = dataUrl;
+                this.paint();
+                toast(`✅ Imagen cargada en el ítem ${i + 1}`);
+              } catch (err) {
+                toast("No se pudo procesar la imagen", true);
+              }
+            }
+          });
+        }
+
+        if (thumbBox && fileInput) {
+          thumbBox.addEventListener("click", (e) => {
+            if (e.target.classList.contains("img-thumb-remove")) return;
+            fileInput.click();
+          });
+
+          thumbBox.addEventListener("paste", (e) => {
+            ImageHelper.handlePasteEvent(e, (dataUrl) => {
+              this.items[i].imagen = dataUrl;
+              this.paint();
+              toast(`✅ Imagen pegada en el ítem ${i + 1}`);
+            });
+          });
+        }
+
+        if (rmBtn) {
+          rmBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.items[i].imagen = "";
+            this.paint();
+          });
+        }
+
+        if (rowEl) {
+          rowEl.addEventListener("paste", (e) => {
+            ImageHelper.handlePasteEvent(e, (dataUrl) => {
+              this.items[i].imagen = dataUrl;
+              this.paint();
+              toast(`✅ Imagen pegada en el ítem ${i + 1}`);
+            });
+          });
+        }
+      }
     });
-  });
-  this.recalc();
+
+    this.recalc();
+  }
 };
 
 ItemsUI.recalc = function () {
@@ -1581,7 +1826,8 @@ const Cotizador = {
       validez: (document.getElementById("f_validez") ? document.getElementById("f_validez").value : "").trim(),
       asesor: (document.getElementById("f_asesor") ? document.getElementById("f_asesor").value : "").trim(),
       fecha: (document.getElementById("f_fecha") ? document.getElementById("f_fecha").value : "").trim(),
-      observaciones: document.getElementById("f_obs") ? document.getElementById("f_obs").value : ""
+      observaciones: document.getElementById("f_obs") ? document.getElementById("f_obs").value : "",
+      showImages: document.getElementById("toggle_imagenes") ? document.getElementById("toggle_imagenes").checked : false
     };
   },
 
@@ -1666,7 +1912,7 @@ const Cotizador = {
       numero = seq.preview;
     }
 
-    const record = { numero, ...data, items, subtotal, iva, total: subtotal + iva };
+    const record = { numero, ...data, showImages: !!data.showImages, items, subtotal, iva, total: subtotal + iva };
 
     const all = [...DB.getCotizaciones()];
     const idx = all.findIndex(c => c.numero === numero);
@@ -1873,14 +2119,46 @@ const PdfBuilder = {
     y += 14;
 
     // 4. TABLA DE PRODUCTOS
-    const cols = [
-      { key: "codigo", label: "CÓDIGO", w: 58, align: "center" },
-      { key: "descripcion", label: "DESCRIPCIÓN", w: contentW - 58 - 36 - 72 - 42 - 76, align: "left" },
-      { key: "cantidad", label: "CANT.", w: 36, align: "center" },
-      { key: "vrUnitario", label: "VR. UNITARIO", w: 72, align: "right" },
-      { key: "ivaPct", label: "IVA %", w: 42, align: "center" },
-      { key: "valorTotal", label: "VR. TOTAL", w: 76, align: "right" }
-    ];
+    const showImages = r.showImages !== undefined ? !!r.showImages : (STATE.config && !!STATE.config.showImages);
+
+    let cols = [];
+    if (showImages) {
+      const numW = 22;
+      const imgW = 46;
+      const codW = 54;
+      const cantW = 34;
+      const vuW = 70;
+      const ivaW = 38;
+      const vtW = 74;
+      const descW = contentW - numW - imgW - codW - cantW - vuW - ivaW - vtW;
+      cols = [
+        { key: "num", label: "N°", w: numW, align: "center" },
+        { key: "imagen", label: "IMAGEN", w: imgW, align: "center" },
+        { key: "codigo", label: "CÓDIGO", w: codW, align: "center" },
+        { key: "descripcion", label: "DESCRIPCIÓN", w: descW, align: "left" },
+        { key: "cantidad", label: "CANT.", w: cantW, align: "center" },
+        { key: "vrUnitario", label: "VR. UNITARIO", w: vuW, align: "right" },
+        { key: "ivaPct", label: "IVA %", w: ivaW, align: "center" },
+        { key: "valorTotal", label: "VR. TOTAL", w: vtW, align: "right" }
+      ];
+    } else {
+      const numW = 24;
+      const codW = 58;
+      const cantW = 36;
+      const vuW = 72;
+      const ivaW = 42;
+      const vtW = 76;
+      const descW = contentW - numW - codW - cantW - vuW - ivaW - vtW;
+      cols = [
+        { key: "num", label: "N°", w: numW, align: "center" },
+        { key: "codigo", label: "CÓDIGO", w: codW, align: "center" },
+        { key: "descripcion", label: "DESCRIPCIÓN", w: descW, align: "left" },
+        { key: "cantidad", label: "CANT.", w: cantW, align: "center" },
+        { key: "vrUnitario", label: "VR. UNITARIO", w: vuW, align: "right" },
+        { key: "ivaPct", label: "IVA %", w: ivaW, align: "center" },
+        { key: "valorTotal", label: "VR. TOTAL", w: vtW, align: "right" }
+      ];
+    }
 
     doc.setFillColor(...navy);
     doc.roundedRect(M, y, contentW, 20, 3, 3, "F");
@@ -1902,14 +2180,17 @@ const PdfBuilder = {
     const items = Array.isArray(r.items) ? r.items : [];
     doc.setLineWidth(0.6);
 
+    const descCol = cols.find(c => c.key === "descripcion");
+
     items.forEach((it, idx) => {
       const vt = (Number(it.cantidad) || 0) * (Number(it.vrUnitario) || 0);
       const isEven = idx % 2 === 1;
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
-      const descLines = doc.splitTextToSize(String(it.descripcion || ""), cols[1].w - 12);
-      const rowH = Math.max(18, 8 + descLines.length * 10);
+      const descLines = doc.splitTextToSize(String(it.descripcion || ""), (descCol ? descCol.w : 150) - 12);
+      const minRowH = (showImages && it.imagen) ? 36 : (showImages ? 24 : 18);
+      const rowH = Math.max(minRowH, 8 + descLines.length * 10);
 
       if (isEven) {
         doc.setFillColor(...bgZebra);
@@ -1919,26 +2200,52 @@ const PdfBuilder = {
       doc.setDrawColor(...borderSoft);
       doc.line(M, y + rowH, pageW - M, y + rowH);
 
-      curX = M;
       doc.setTextColor(...textDark);
 
-      doc.text(String(it.codigo || ""), curX + cols[0].w / 2, y + 12, { align: "center" });
-      curX += cols[0].w;
+      // Posición vertical del texto de una línea: centrado verticalmente
+      const textY = y + Math.max(12, Math.min(rowH / 2 + 3.5, 14));
 
-      doc.text(descLines, curX + 6, y + 12);
-      curX += cols[1].w;
+      cols.forEach(c => {
+        const colIdx = cols.indexOf(c);
+        const colX = M + cols.slice(0, colIdx).reduce((acc, prev) => acc + prev.w, 0);
 
-      doc.text(String(it.cantidad || 0), curX + cols[2].w / 2, y + 12, { align: "center" });
-      curX += cols[2].w;
-
-      doc.text(fmtCOP(it.vrUnitario), curX + cols[3].w - 6, y + 12, { align: "right" });
-      curX += cols[3].w;
-
-      const ivaStr = Math.round((Number(it.ivaPct) || 0) * 100) + "%";
-      doc.text(ivaStr, curX + cols[4].w / 2, y + 12, { align: "center" });
-      curX += cols[4].w;
-
-      doc.text(fmtCOP(vt), curX + cols[5].w - 6, y + 12, { align: "right" });
+        if (c.key === "num") {
+          doc.text(String(idx + 1), colX + c.w / 2, textY, { align: "center" });
+        } else if (c.key === "imagen") {
+          if (it.imagen) {
+            try {
+              const imgW = 36;
+              const imgH = 26;
+              const ix = colX + (c.w - imgW) / 2;
+              const iy = y + (rowH - imgH) / 2;
+              doc.addImage(it.imagen, "JPEG", ix, iy, imgW, imgH, undefined, "FAST");
+            } catch (e1) {
+              try {
+                const imgW = 36;
+                const imgH = 26;
+                const ix = colX + (c.w - imgW) / 2;
+                const iy = y + (rowH - imgH) / 2;
+                doc.addImage(it.imagen, "PNG", ix, iy, imgW, imgH, undefined, "FAST");
+              } catch (e2) {
+                console.warn("Error agregando imagen a PDF:", e2);
+              }
+            }
+          }
+        } else if (c.key === "codigo") {
+          doc.text(String(it.codigo || ""), colX + c.w / 2, textY, { align: "center" });
+        } else if (c.key === "descripcion") {
+          doc.text(descLines, colX + 6, y + 11.5);
+        } else if (c.key === "cantidad") {
+          doc.text(String(it.cantidad || 0), colX + c.w / 2, textY, { align: "center" });
+        } else if (c.key === "vrUnitario") {
+          doc.text(fmtCOP(it.vrUnitario), colX + c.w - 6, textY, { align: "right" });
+        } else if (c.key === "ivaPct") {
+          const ivaStr = Math.round((Number(it.ivaPct) || 0) * 100) + "%";
+          doc.text(ivaStr, colX + c.w / 2, textY, { align: "center" });
+        } else if (c.key === "valorTotal") {
+          doc.text(fmtCOP(vt), colX + c.w - 6, textY, { align: "right" });
+        }
+      });
 
       y += rowH;
     });
