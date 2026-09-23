@@ -23,12 +23,6 @@ function getSb() {
    - Siguientes veces: guarda directo sin preguntar
    - Fallback: descarga normal si el navegador no soporta la API
    ============================================================ */
-/* ============================================================
-   FOLDER SAVER — Guarda PDFs en carpeta local via File System Access API
-   - Primera vez: muestra selector de carpeta
-   - Siguientes veces: guarda directo sin preguntar
-   - Fallback: descarga normal si el navegador no soporta la API
-   ============================================================ */
 const FolderSaver = {
   DB_NAME: "CotizadorFS",
   DB_STORE: "handles",
@@ -303,6 +297,50 @@ const DataSync = {
     return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
   },
 
+  async _fetchTable(table) {
+    const sb = getSb();
+    const rows = [];
+    let from = 0;
+    const step = 1000;
+    for (;;) {
+      const { data, error } = await sb.from(table).select("*").range(from, from + step - 1);
+      if (error) throw new Error(`No se pudo leer la tabla ${table}: ${error.message}`);
+      if (!data || !data.length) break;
+      rows.push(...data);
+      if (data.length < step) break;
+      from += step;
+    }
+    return rows;
+  },
+
+  async _clearTable(table) {
+    const sb = getSb();
+    const { error } = await sb.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    if (error) throw new Error(`No se pudo vaciar la tabla ${table}: ${error.message}`);
+  },
+
+  async _insertChunks(table, rows, onRow) {
+    const sb = getSb();
+    const chunk = 500;
+    for (let i = 0; i < rows.length; i += chunk) {
+      const slice = rows.slice(i, i + chunk);
+      const { error } = await sb.from(table).insert(slice);
+      if (error) throw new Error(`Error subiendo ${table} a Supabase: ${error.message}`);
+      if (onRow) onRow(Math.min(i + chunk, rows.length));
+    }
+  },
+
+  async _restoreBackup(backupProd, backupClie) {
+    try {
+      await this._clearTable("productos");
+      await this._clearTable("clientes");
+      if (backupProd.length) await this._insertChunks("productos", backupProd);
+      if (backupClie.length) await this._insertChunks("clientes", backupClie);
+    } catch (e) {
+      console.error("Error restaurando respaldo:", e);
+    }
+  },
+
   async uploadToSupabase(htmlProd, htmlClie, onProgress) {
     const sb = getSb();
     if (!sb) throw new Error("No hay conexión con Supabase.");
@@ -314,38 +352,43 @@ const DataSync = {
     if (!productos.length) throw new Error("No se encontraron productos válidos en el archivo de existencias.");
     if (!clientes.length) throw new Error("No se encontraron clientes válidos en el archivo de directorio.");
 
-    onProgress({ pct: 30, msg: "Preparando base de datos en la nube..." });
-    await sb.from("productos").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-    await sb.from("clientes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    onProgress({ pct: 26, msg: "Respaldando información actual..." });
+    let backupProd = [], backupClie = [];
+    try {
+      backupProd = await this._fetchTable("productos");
+      backupClie = await this._fetchTable("clientes");
+    } catch (e) {
+      throw new Error("Se abortó por seguridad para no perder datos: " + e.message);
+    }
 
     const totalRecords = productos.length + clientes.length;
     let processedRecords = 0;
-    const chunk = 500;
 
-    // Subir productos
-    for (let i = 0; i < productos.length; i += chunk) {
-      const slice = productos.slice(i, i + chunk);
-      const { error } = await sb.from("productos").insert(slice);
-      if (error) throw new Error("Error subiendo productos a Supabase: " + error.message);
-      processedRecords += slice.length;
-      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
-      onProgress({
-        pct,
-        msg: `Subiendo productos (${Math.min(i + chunk, productos.length).toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
-      });
-    }
+    try {
+      onProgress({ pct: 30, msg: "Preparando base de datos en la nube..." });
+      await this._clearTable("productos");
+      await this._clearTable("clientes");
 
-    // Subir clientes
-    for (let i = 0; i < clientes.length; i += chunk) {
-      const slice = clientes.slice(i, i + chunk);
-      const { error } = await sb.from("clientes").insert(slice);
-      if (error) throw new Error("Error subiendo clientes a Supabase: " + error.message);
-      processedRecords += slice.length;
-      const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
-      onProgress({
-        pct,
-        msg: `Subiendo clientes (${Math.min(i + chunk, clientes.length).toLocaleString("es-CO")}/${clientes.length.toLocaleString("es-CO")})...`
+      await this._insertChunks("productos", productos, done => {
+        processedRecords = done;
+        const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
+        onProgress({
+          pct,
+          msg: `Subiendo productos (${done.toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
+        });
       });
+
+      await this._insertChunks("clientes", clientes, done => {
+        const pct = 30 + Math.round(((productos.length + done) / totalRecords) * 60);
+        onProgress({
+          pct,
+          msg: `Subiendo clientes (${done.toLocaleString("es-CO")}/${clientes.length.toLocaleString("es-CO")})...`
+        });
+      });
+    } catch (e) {
+      onProgress({ pct: 60, msg: "Ocurrió un error, restaurando el respaldo anterior..." });
+      await this._restoreBackup(backupProd, backupClie);
+      throw new Error(e.message + " Se restauró la información anterior.");
     }
 
     onProgress({ pct: 95, msg: "Recargando catálogo actualizado..." });
@@ -372,8 +415,6 @@ let STATE = {
     showImages: false
   }
 };
-
-let DRAFT = null;
 
 function persistStateLocal() {
   try {
@@ -412,13 +453,15 @@ const DB = {
         maxN = Math.max(maxN, parseInt(m[2], 10));
       }
     });
-    const nextVal = maxN + 1;
-    return {
-      preview: `C-${year}-${nextVal}`,
-      commit: () => {}
-    };
+    return `C-${year}-${maxN + 1}`;
   }
 };
+
+function bumpNumero(numero) {
+  const parts = String(numero || "").split("-");
+  parts[parts.length - 1] = String((Number(parts[parts.length - 1]) || 0) + 1);
+  return parts.join("-");
+}
 
 function toast(msg, isError) {
   const t = document.getElementById("toast");
@@ -1752,14 +1795,6 @@ const ItemsUI = {
             if (e.target.classList.contains("img-thumb-remove")) return;
             fileInput.click();
           });
-
-          thumbBox.addEventListener("paste", (e) => {
-            ImageHelper.handlePasteEvent(e, (dataUrl) => {
-              this.items[i].imagen = dataUrl;
-              this.paint();
-              toast(`✅ Imagen pegada en el ítem ${i + 1}`);
-            });
-          });
         }
 
         if (rmBtn) {
@@ -1772,6 +1807,7 @@ const ItemsUI = {
 
         if (rowEl) {
           rowEl.addEventListener("paste", (e) => {
+            if (e.defaultPrevented) return;
             ImageHelper.handlePasteEvent(e, (dataUrl) => {
               this.items[i].imagen = dataUrl;
               this.paint();
@@ -1906,57 +1942,85 @@ const Cotizador = {
     });
 
     const isEdit = !!this._editingNumero;
-    let numero = this._editingNumero;
-    if (!numero) {
-      const seq = DB.nextNumero();
-      numero = seq.preview;
-    }
+    let numero = this._editingNumero || DB.nextNumero();
 
     const record = { numero, ...data, showImages: !!data.showImages, items, subtotal, iva, total: subtotal + iva };
 
+    const sb = getSb();
+
+    // Nueva: reservar número en la nube con reintentos si choca (evita sobrescribir a otro usuario)
+    if (!isEdit && sb) {
+      let row = this.toDbRow(record);
+      for (let t = 0; t < 50; t++) {
+        const { error } = await sb.from("cotizaciones").insert(row);
+        if (!error) break;
+        const msg = error.message || "";
+        if (error.code === "23505") {
+          numero = bumpNumero(numero);
+          record.numero = numero;
+          row = this.toDbRow(record);
+        } else if (/contacto/i.test(msg)) {
+          delete row.contacto;
+        } else {
+          console.warn("Advertencia al guardar en Supabase:", error);
+          break;
+        }
+      }
+    }
+
+    // Guardar local
     const all = [...DB.getCotizaciones()];
-    const idx = all.findIndex(c => c.numero === numero);
+    const idx = all.findIndex(c => c.numero === record.numero);
     if (idx >= 0) all[idx] = record;
     else all.push(record);
     DB.setCotizaciones(all);
 
-    this._editingNumero = null;
-    DRAFT = null;
-    persistStateLocal();
-
-    const sb = getSb();
-    if (sb) {
+    // Edición: sincronizar con la nube
+    if (isEdit && sb) {
       try {
-        const { error } = await sb.from("cotizaciones").upsert({
-          numero: record.numero,
-          fecha: record.fecha,
-          cliente_nombre: record.cliente,
-          cliente_nit: record.nit,
-          cliente_ciudad: record.ciudad,
-          asesor_nombre: record.asesor,
-          tiempo_entrega: record.tiempoEntrega,
-          forma_pago: record.formaPago,
-          validez: record.validez,
-          observaciones: record.observaciones,
-          subtotal: record.subtotal,
-          iva: record.iva,
-          total: record.total,
-          items: record.items,
-          updated_at: new Date().toISOString()
-        }, { onConflict: "numero" });
+        let row = this.toDbRow(record);
+        let { error } = await sb.from("cotizaciones").upsert(row, { onConflict: "numero" });
+        if (error && /contacto/i.test(error.message || "")) {
+          delete row.contacto;
+          ({ error } = await sb.from("cotizaciones").upsert(row, { onConflict: "numero" }));
+        }
         if (error) console.warn("Advertencia al guardar en Supabase:", error);
       } catch (e) {
         console.warn("Error guardando en Supabase:", e);
       }
     }
 
-    toast(isEdit ? `Cotización ${numero} actualizada` : `Cotización ${numero} guardada`);
+    this._editingNumero = null;
+    persistStateLocal();
+
+    toast(isEdit ? `Cotización ${record.numero} actualizada` : `Cotización ${record.numero} guardada`);
 
     if (withPdf) {
       await this.writePdf(record);
     }
 
     Router.go("guardadas");
+  },
+
+  toDbRow(r) {
+    return {
+      numero: r.numero,
+      fecha: r.fecha,
+      cliente_nombre: r.cliente,
+      cliente_nit: r.nit,
+      cliente_ciudad: r.ciudad,
+      contacto: r.contacto,
+      asesor_nombre: r.asesor,
+      tiempo_entrega: r.tiempoEntrega,
+      forma_pago: r.formaPago,
+      validez: r.validez,
+      observaciones: r.observaciones,
+      subtotal: r.subtotal,
+      iva: r.iva,
+      total: r.total,
+      items: r.items,
+      updated_at: new Date().toISOString()
+    };
   },
 
   async remove(numero) {
@@ -2008,20 +2072,23 @@ const Cotizador = {
    GENERADOR DE PDF (jsPDF) — diseño profesional y limpio
    ============================================================ */
 const PdfBuilder = {
+  PAGE_W: 595.28,
+  PAGE_H: 841.89,
+  M: 36,
+
   build(r) {
     const { jsPDF } = window.jspdf;
-    const pageW = 595.28;
-    const probe = new jsPDF({ unit: "pt", format: [pageW, 3000], orientation: "p" });
-    const finalY = this.renderContent(probe, r, pageW);
-    const minH = 841.89;
-    const finalH = Math.max(finalY + 30, minH);
-    const doc = new jsPDF({ unit: "pt", format: [pageW, finalH], orientation: "p" });
-    this.renderContent(doc, r, pageW);
+    const doc = new jsPDF({ unit: "pt", format: [this.PAGE_W, this.PAGE_H], orientation: "p" });
+    this.renderContent(doc, r);
+    this.renderPageFooters(doc);
     return doc.output("blob");
   },
 
-  renderContent(doc, r, pageW) {
-    const M = 36;
+  renderContent(doc, r) {
+    const M = this.M;
+    const pageW = this.PAGE_W;
+    const pageH = this.PAGE_H;
+    const bottomLimit = pageH - 48;
     const contentW = pageW - 2 * M;
     const navy = [27, 58, 107];
     const bgBadge = [238, 242, 247];
@@ -2032,9 +2099,14 @@ const PdfBuilder = {
     const textDark = [43, 43, 43];
     const textMuted = [102, 102, 102];
     const labelKey = [138, 148, 163];
-    const footerColor = [154, 163, 177];
 
     let y = 28;
+
+    const ensureSpace = (yy, needed) => {
+      if (yy + needed <= bottomLimit) return yy;
+      doc.addPage([pageW, pageH], "p");
+      return M + 8;
+    };
 
     // 1. ENCABEZADO: Logo + Información de la empresa
     const logoW = 120, logoH = 48;
@@ -2106,6 +2178,7 @@ const PdfBuilder = {
       { label: "CIUDAD", value: r.ciudad || "—", w: contentW * 0.26 },
       { label: "CONTACTO", value: r.contacto || "—", w: contentW * 0.22 }
     ];
+    y = ensureSpace(y, 80);
     y = this.renderPanel(doc, clientCells, M, y, contentW, bgPanel, border, labelKey, textDark);
     y += 8;
 
@@ -2115,6 +2188,7 @@ const PdfBuilder = {
       { label: "FORMA DE PAGO", value: r.formaPago || "—", w: contentW * 0.33 },
       { label: "VALIDEZ DE LA OFERTA", value: r.validez || "15 días", w: contentW * 0.33 }
     ];
+    y = ensureSpace(y, 80);
     y = this.renderPanel(doc, termsCells, M, y, contentW, bgPanel, border, labelKey, textDark);
     y += 14;
 
@@ -2124,7 +2198,7 @@ const PdfBuilder = {
     let cols = [];
     if (showImages) {
       const numW = 22;
-      const imgW = 46;
+      const imgW = 64;
       const codW = 54;
       const cantW = 34;
       const vuW = 70;
@@ -2160,22 +2234,26 @@ const PdfBuilder = {
       ];
     }
 
-    doc.setFillColor(...navy);
-    doc.roundedRect(M, y, contentW, 20, 3, 3, "F");
-    doc.rect(M, y + 15, contentW, 5, "F");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(255, 255, 255);
+    const drawTableHeader = (yy) => {
+      doc.setFillColor(...navy);
+      doc.roundedRect(M, yy, contentW, 20, 3, 3, "F");
+      doc.rect(M, yy + 15, contentW, 5, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      let curX = M;
+      cols.forEach(c => {
+        let tx = curX + 6;
+        if (c.align === "center") tx = curX + c.w / 2;
+        else if (c.align === "right") tx = curX + c.w - 6;
+        doc.text(c.label, tx, yy + 13, { align: c.align });
+        curX += c.w;
+      });
+      return yy + 20;
+    };
 
-    let curX = M;
-    cols.forEach(c => {
-      let tx = curX + 6;
-      if (c.align === "center") tx = curX + c.w / 2;
-      else if (c.align === "right") tx = curX + c.w - 6;
-      doc.text(c.label, tx, y + 13, { align: c.align });
-      curX += c.w;
-    });
-    y += 20;
+    y = ensureSpace(y, 34);
+    y = drawTableHeader(y);
 
     const items = Array.isArray(r.items) ? r.items : [];
     doc.setLineWidth(0.6);
@@ -2189,8 +2267,12 @@ const PdfBuilder = {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       const descLines = doc.splitTextToSize(String(it.descripcion || ""), (descCol ? descCol.w : 150) - 12);
-      const minRowH = (showImages && it.imagen) ? 36 : (showImages ? 24 : 18);
-      const rowH = Math.max(minRowH, 8 + descLines.length * 10);
+      const minRowH = (showImages && it.imagen) ? 48 : (showImages ? 28 : 20);
+      const rowH = Math.max(minRowH, 9 + descLines.length * 10);
+
+      const yBefore = y;
+      y = ensureSpace(y, rowH);
+      if (y !== yBefore) y = drawTableHeader(y);
 
       if (isEven) {
         doc.setFillColor(...bgZebra);
@@ -2214,15 +2296,15 @@ const PdfBuilder = {
         } else if (c.key === "imagen") {
           if (it.imagen) {
             try {
-              const imgW = 36;
-              const imgH = 26;
+              const imgW = 54;
+              const imgH = 38;
               const ix = colX + (c.w - imgW) / 2;
               const iy = y + (rowH - imgH) / 2;
               doc.addImage(it.imagen, "JPEG", ix, iy, imgW, imgH, undefined, "FAST");
             } catch (e1) {
               try {
-                const imgW = 36;
-                const imgH = 26;
+                const imgW = 54;
+                const imgH = 38;
                 const ix = colX + (c.w - imgW) / 2;
                 const iy = y + (rowH - imgH) / 2;
                 doc.addImage(it.imagen, "PNG", ix, iy, imgW, imgH, undefined, "FAST");
@@ -2251,6 +2333,8 @@ const PdfBuilder = {
     });
 
     y += 8;
+
+    y = ensureSpace(y, 106);
 
     // 5. TOTALES
     const totW = 195;
@@ -2284,7 +2368,6 @@ const PdfBuilder = {
     // 6. OBSERVACIONES + FIRMA
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
-    const boxTop = y;
 
     const defaultObs =
       "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
@@ -2296,6 +2379,9 @@ const PdfBuilder = {
     doc.setFontSize(7.6);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
     const obsH = Math.max(92, 24 + obsLines.length * 10);
+
+    y = ensureSpace(y, obsH + 26);
+    const boxTop = y;
 
     doc.setFillColor(...bgPanel);
     doc.setDrawColor(...border);
@@ -2335,23 +2421,32 @@ const PdfBuilder = {
 
     y = boxTop + obsH + 16;
 
-    // 7. PIE DE PÁGINA
-    doc.setDrawColor(...borderSoft);
-    doc.setLineWidth(0.6);
-    doc.line(M, y, pageW - M, y);
+    return y;
+  },
 
-    y += 10;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(...footerColor);
-    doc.text(
-      "Representaciones M&M Medical SAS · Bucaramanga, Colombia · Documento generado electrónicamente",
-      pageW / 2,
-      y,
-      { align: "center" }
-    );
-
-    return y + 10;
+  renderPageFooters(doc) {
+    const pageW = this.PAGE_W;
+    const pageH = this.PAGE_H;
+    const M = this.M;
+    const footerColor = [154, 163, 177];
+    const borderSoft = [230, 234, 240];
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      const fy = pageH - 26;
+      doc.setDrawColor(...borderSoft);
+      doc.setLineWidth(0.6);
+      doc.line(M, fy, pageW - M, fy);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(...footerColor);
+      doc.text(
+        `Representaciones M&M Medical SAS · Bucaramanga, Colombia · Documento generado electrónicamente · Página ${i} de ${pages}`,
+        pageW / 2,
+        fy + 12,
+        { align: "center" }
+      );
+    }
   },
 
   renderPanel(doc, cells, x0, y0, totalW, bgColor, borderColor, labelColor, valColor) {
