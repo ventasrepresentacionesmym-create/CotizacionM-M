@@ -2072,9 +2072,9 @@ const Cotizador = {
    GENERADOR DE PDF (jsPDF) — diseño profesional y limpio
    ============================================================ */
 const PdfBuilder = {
-  PAGE_W: 595.28,
-  PAGE_H: 841.89,
-  M: 36,
+  PAGE_W: 612,
+  PAGE_H: 792,
+  M: 28.35,
 
   build(r) {
     const { jsPDF } = window.jspdf;
@@ -2198,7 +2198,7 @@ const PdfBuilder = {
     let cols = [];
     if (showImages) {
       const numW = 22;
-      const imgW = 64;
+      const imgW = 96;
       const codW = 54;
       const cantW = 34;
       const vuW = 70;
@@ -2267,7 +2267,7 @@ const PdfBuilder = {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       const descLines = doc.splitTextToSize(String(it.descripcion || ""), (descCol ? descCol.w : 150) - 12);
-      const minRowH = (showImages && it.imagen) ? 48 : (showImages ? 28 : 20);
+      const minRowH = (showImages && it.imagen) ? 62 : (showImages ? 30 : 20);
       const rowH = Math.max(minRowH, 9 + descLines.length * 10);
 
       const yBefore = y;
@@ -2296,15 +2296,15 @@ const PdfBuilder = {
         } else if (c.key === "imagen") {
           if (it.imagen) {
             try {
-              const imgW = 54;
-              const imgH = 38;
+              const imgW = 84;
+              const imgH = 58;
               const ix = colX + (c.w - imgW) / 2;
               const iy = y + (rowH - imgH) / 2;
               doc.addImage(it.imagen, "JPEG", ix, iy, imgW, imgH, undefined, "FAST");
             } catch (e1) {
               try {
-                const imgW = 54;
-                const imgH = 38;
+                const imgW = 84;
+                const imgH = 58;
                 const ix = colX + (c.w - imgW) / 2;
                 const iy = y + (rowH - imgH) / 2;
                 doc.addImage(it.imagen, "PNG", ix, iy, imgW, imgH, undefined, "FAST");
