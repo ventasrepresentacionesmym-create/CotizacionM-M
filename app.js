@@ -184,7 +184,7 @@ const DataSync = {
     const result = [];
     for (let b = 1; b < trBlocks.length; b++) {
       const block = trBlocks[b];
-      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<td|$)/gi)];
+      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)];
       if (!tdMatches.length) continue;
       result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
     }
@@ -303,7 +303,8 @@ const DataSync = {
     let from = 0;
     const step = 1000;
     for (;;) {
-      const { data, error } = await sb.from(table).select("*").range(from, from + step - 1);
+      const orderCol = table === "productos" ? "codigo" : "nombre";
+      const { data, error } = await sb.from(table).select("*").order(orderCol).range(from, from + step - 1);
       if (error) throw new Error(`No se pudo leer la tabla ${table}: ${error.message}`);
       if (!data || !data.length) break;
       rows.push(...data);
@@ -392,7 +393,7 @@ const DataSync = {
     }
 
     onProgress({ pct: 95, msg: "Recargando catálogo actualizado..." });
-    await AppInit.boot();
+    await AppInit.bootCatalog();
     onProgress({ pct: 100, msg: "✅ ¡Base de datos actualizada con éxito!" });
 
     return {
@@ -418,8 +419,18 @@ let STATE = {
 
 function persistStateLocal() {
   try {
-    localStorage.setItem("cotizador_state_cache", JSON.stringify(STATE));
-  } catch (e) {}
+    // Excluir imágenes base64 de la caché local para evitar QuotaExceededError (límite ~5 MB)
+    const stateToSave = {
+      ...STATE,
+      cotizaciones: (STATE.cotizaciones || []).map(c => ({
+        ...c,
+        items: (c.items || []).map(it => ({ ...it, imagen: "" }))
+      }))
+    };
+    localStorage.setItem("cotizador_state_cache", JSON.stringify(stateToSave));
+  } catch (e) {
+    console.warn("⚠️ No se pudo guardar la caché local (posiblemente por falta de espacio):", e);
+  }
 }
 
 function loadStateLocal() {
@@ -458,10 +469,19 @@ const DB = {
 };
 
 function bumpNumero(numero) {
+  // Preservar siempre el formato C-YYYY-N
+  const m = /^(C-\d{4}-)(\d+)$/.exec(String(numero || ""));
+  if (m) return m[1] + (parseInt(m[2], 10) + 1);
+  // Fallback para formatos sin prefijo C-
   const parts = String(numero || "").split("-");
   parts[parts.length - 1] = String((Number(parts[parts.length - 1]) || 0) + 1);
   return parts.join("-");
 }
+
+const DEFAULT_OBSERVACIONES =
+  "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
+  "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
+  "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
 
 function toast(msg, isError) {
   const t = document.getElementById("toast");
@@ -480,7 +500,21 @@ function fmtCOP(n) {
 function parseNum(v) {
   if (typeof v === "number") return v;
   if (!v) return 0;
-  return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
+  let s = String(v).trim().replace(/[^\d.,-]/g, "");
+  if (!s || s === "-") return 0;
+  const lastDot = s.lastIndexOf(".");
+  const lastComma = s.lastIndexOf(",");
+  if (lastComma > lastDot) {
+    // Formato es-CO: 1.234,56 o 1234,56 → el separador decimal es la coma
+    s = s.replace(/\./g, "").replace(/,/g, ".");
+  } else if (lastDot >= 0 && lastComma >= 0) {
+    // Formato con miles por coma: 1,234.56
+    s = s.replace(/,/g, "");
+  } else if (lastDot >= 0 && s.split(".").length > 2) {
+    // Varios puntos: son separadores de miles (1.234.567)
+    s = s.replace(/\./g, "");
+  }
+  return Number(s) || 0;
 }
 
 function esc(s) {
@@ -780,8 +814,16 @@ const AppInit = {
   async boot() {
     loadStateLocal();
     const sb = getSb();
+    const badge = document.getElementById("cloudStatus");
+
     if (!sb) {
       console.warn("Supabase no está disponible en este momento, usando caché local.");
+      if (badge) {
+        badge.innerHTML = '<span class="cloud-dot" style="background:#f59e0b"></span> Sin conexión · Caché local';
+        badge.style.color = "#92400e";
+        badge.style.background = "#fffbeb";
+        badge.style.borderColor = "#fde68a";
+      }
       return;
     }
 
@@ -843,6 +885,8 @@ const AppInit = {
         subtotal: Number(c.subtotal) || 0,
         iva: Number(c.iva) || 0,
         total: Number(c.total) || 0,
+        // Bug #10 fix: leer showImages por cotización desde la nube
+        showImages: !!c.show_images,
         items: c.items || []
       }));
 
@@ -854,27 +898,37 @@ const AppInit = {
       let latestUpdated = null;
 
       while (hasMore) {
-        const { data: dbProd, error } = await sb.from("productos").select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at").range(from, from + step - 1);
+        const { data: dbProd, error } = await sb.from("productos")
+          .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
+          .order("updated_at", { ascending: false, nullsFirst: false })
+          .range(from, from + step - 1);
         if (error || !dbProd || !dbProd.length) {
           hasMore = false;
         } else {
           allProducts.push(...dbProd);
-          if (!latestUpdated && dbProd[0] && dbProd[0].updated_at) {
-            latestUpdated = dbProd[0].updated_at;
-          }
+          dbProd.forEach(p => {
+            if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
+              latestUpdated = p.updated_at;
+            }
+          });
           if (dbProd.length < step) hasMore = false;
           else from += step;
         }
       }
 
-      STATE.datos = allProducts.map(p => [
-        p.codigo,
-        p.descripcion,
-        Number(p.iva_pct) || 0,
-        Number(p.existencia) || 0,
-        Number(p.costo) || 0,
-        p.proveedor || ""
-      ]);
+      STATE.datos = allProducts.map(p => {
+        // Bug #5 fix: normalizar iva_pct siempre como fracción (0.19), por si llega como entero (19)
+        const rawIva = Number(p.iva_pct) || 0;
+        const ivaPct = rawIva > 1 ? rawIva / 100 : rawIva;
+        return [
+          p.codigo,
+          p.descripcion,
+          ivaPct,
+          Number(p.existencia) || 0,
+          Number(p.costo) || 0,
+          p.proveedor || ""
+        ];
+      });
 
       if (latestUpdated) {
         STATE.lastUpdate = latestUpdated;
@@ -884,8 +938,79 @@ const AppInit = {
 
       persistStateLocal();
       console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
+
+      // Bug #12 fix: actualizar badge de conexión al estado real
+      if (badge) {
+        badge.innerHTML = '<span class="cloud-dot"></span> Supabase · Conectado';
+        badge.style.color = "";
+        badge.style.background = "";
+        badge.style.borderColor = "";
+      }
     } catch (e) {
       console.error("Error sincronizando con Supabase:", e);
+      // Bug #12 fix: badge rojo cuando hay error de conexión
+      if (badge) {
+        badge.innerHTML = '<span class="cloud-dot" style="background:#dc2626"></span> Error de conexión';
+        badge.style.color = "#991b1b";
+        badge.style.background = "#fef2f2";
+        badge.style.borderColor = "#fecaca";
+      }
+    }
+  },
+
+  // Bug #9 fix: recarga solo catálogo (productos + clientes + asesores) sin tocar cotizaciones en edición
+  async bootCatalog() {
+    const sb = getSb();
+    if (!sb) return;
+    try {
+      const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
+      STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
+
+      let allClientes = [];
+      let fromC = 0;
+      let hasMoreC = true;
+      while (hasMoreC) {
+        const { data: chunkC, error: errC } = await sb.from("clientes")
+          .select("nombre, ciudad, nit").order("nombre").range(fromC, fromC + 999);
+        if (errC || !chunkC || !chunkC.length) { hasMoreC = false; }
+        else {
+          allClientes.push(...chunkC);
+          if (chunkC.length < 1000) hasMoreC = false;
+          else fromC += 1000;
+        }
+      }
+      STATE.cyp.clientes = allClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
+
+      let allProducts = [];
+      let from = 0;
+      let hasMore = true;
+      let latestUpdated = null;
+      while (hasMore) {
+        const { data: dbProd, error } = await sb.from("productos")
+          .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
+          .order("updated_at", { ascending: false, nullsFirst: false })
+          .range(from, from + 999);
+        if (error || !dbProd || !dbProd.length) { hasMore = false; }
+        else {
+          allProducts.push(...dbProd);
+          dbProd.forEach(p => {
+            if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
+              latestUpdated = p.updated_at;
+            }
+          });
+          if (dbProd.length < 1000) hasMore = false;
+          else from += 1000;
+        }
+      }
+      STATE.datos = allProducts.map(p => {
+        const rawIva = Number(p.iva_pct) || 0;
+        return [p.codigo, p.descripcion, rawIva > 1 ? rawIva / 100 : rawIva,
+          Number(p.existencia) || 0, Number(p.costo) || 0, p.proveedor || ""];
+      });
+      if (latestUpdated) STATE.lastUpdate = latestUpdated;
+      persistStateLocal();
+    } catch (e) {
+      console.error("Error recargando catálogo:", e);
     }
   }
 };
@@ -1416,17 +1541,25 @@ Views.renderNueva = function (numeroToLoad) {
   const isEdit = !!existing;
   const source = isEdit ? existing : null;
   const numeroDisplay = isEdit ? existing.numero : "Se asigna al guardar";
-  const hoy = new Date().toISOString().slice(0, 10);
+  const _now = new Date();
+  const hoy = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
 
-  const showImages = source && source.showImages !== undefined ? !!source.showImages : (STATE.config && !!STATE.config.showImages);
+  // Bug fix: determinar showImages exactamente para la cotización actual
+  let showImages = false;
+  if (source) {
+    if (typeof source.showImages === "boolean") {
+      showImages = source.showImages;
+    } else if (source.items && Array.isArray(source.items) && source.items.some(it => it.imagen && String(it.imagen).trim().length > 0)) {
+      showImages = true;
+    } else {
+      showImages = false;
+    }
+  } else {
+    showImages = Boolean(STATE.config && STATE.config.showImages);
+  }
   ItemsUI.showImages = showImages;
 
   Cotizador._editingNumero = isEdit ? existing.numero : null;
-
-  const defaultObs =
-    "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
-    "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
-    "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
 
   el.innerHTML = `
     <div class="section-head">
@@ -1523,7 +1656,7 @@ Views.renderNueva = function (numeroToLoad) {
 
     <div class="card">
       <label>Observaciones</label>
-      <textarea id="f_obs">${esc(source ? source.observaciones || defaultObs : defaultObs)}</textarea>
+      <textarea id="f_obs">${esc(source ? source.observaciones || DEFAULT_OBSERVACIONES : DEFAULT_OBSERVACIONES)}</textarea>
     </div>
 
     <div class="btn-row">
@@ -1538,9 +1671,11 @@ Views.renderNueva = function (numeroToLoad) {
   if (toggleImg) {
     toggleImg.addEventListener("change", (e) => {
       const checked = e.target.checked;
-      STATE.config = STATE.config || {};
-      STATE.config.showImages = checked;
-      persistStateLocal();
+      if (!isEdit) {
+        STATE.config = STATE.config || {};
+        STATE.config.showImages = checked;
+        persistStateLocal();
+      }
       ItemsUI.setShowImages(checked);
     });
   }
@@ -1870,9 +2005,15 @@ const Cotizador = {
   validate(data, withPdf) {
     document.querySelectorAll("#view-nueva .err").forEach(e => e.classList.remove("err"));
 
+    const missing = [];
+    if (!data.fecha) {
+      missing.push("Fecha");
+      const el = document.getElementById("f_fecha");
+      if (el) el.classList.add("err");
+    }
+
     if (!withPdf) {
-      // Para guardar borrador/cotización: SOLO Cliente y Asesor son obligatorios
-      const missing = [];
+      // Para guardar borrador/cotización: Fecha, Cliente y Asesor son obligatorios
       if (!data.cliente) {
         missing.push("Cliente");
         const el = document.getElementById("f_cliente");
@@ -1902,7 +2043,6 @@ const Cotizador = {
         validez: "f_validez",
         asesor: "f_asesor"
       };
-      const missing = [];
       for (const key in required) {
         if (!data[key]) {
           missing.push(required[key]);
@@ -1926,7 +2066,7 @@ const Cotizador = {
       }
     }
 
-    const items = ItemsUI.items.filter(it => (it.codigo && String(it.codigo).trim()) || (it.descripcion && String(it.descripcion).trim()));
+    const items = ItemsUI.items.filter(it => (it.codigo && String(it.codigo).trim()) || (it.descripcion && String(it.descripcion).trim()) || (it.imagen && String(it.imagen).trim()));
     if (withPdf && !items.length) {
       return toast("Para generar el PDF debes agregar al menos un producto a la cotización", true);
     }
@@ -1947,13 +2087,18 @@ const Cotizador = {
     const record = { numero, ...data, showImages: !!data.showImages, items, subtotal, iva, total: subtotal + iva };
 
     const sb = getSb();
+    let cloudSaved = !sb ? false : false;
+    let cloudErrorMsg = "";
 
     // Nueva: reservar número en la nube con reintentos si choca (evita sobrescribir a otro usuario)
     if (!isEdit && sb) {
       let row = this.toDbRow(record);
       for (let t = 0; t < 50; t++) {
-        const { error } = await sb.from("cotizaciones").insert(row);
-        if (!error) break;
+        let { error } = await sb.from("cotizaciones").insert(row);
+        if (!error) {
+          cloudSaved = true;
+          break;
+        }
         const msg = error.message || "";
         if (error.code === "23505") {
           numero = bumpNumero(numero);
@@ -1961,19 +2106,15 @@ const Cotizador = {
           row = this.toDbRow(record);
         } else if (/contacto/i.test(msg)) {
           delete row.contacto;
+        } else if (/show_images/i.test(msg)) {
+          delete row.show_images;
         } else {
+          cloudErrorMsg = msg;
           console.warn("Advertencia al guardar en Supabase:", error);
           break;
         }
       }
     }
-
-    // Guardar local
-    const all = [...DB.getCotizaciones()];
-    const idx = all.findIndex(c => c.numero === record.numero);
-    if (idx >= 0) all[idx] = record;
-    else all.push(record);
-    DB.setCotizaciones(all);
 
     // Edición: sincronizar con la nube
     if (isEdit && sb) {
@@ -1984,16 +2125,37 @@ const Cotizador = {
           delete row.contacto;
           ({ error } = await sb.from("cotizaciones").upsert(row, { onConflict: "numero" }));
         }
-        if (error) console.warn("Advertencia al guardar en Supabase:", error);
+        if (error && /show_images/i.test(error.message || "")) {
+          delete row.show_images;
+          ({ error } = await sb.from("cotizaciones").upsert(row, { onConflict: "numero" }));
+        }
+        if (!error) {
+          cloudSaved = true;
+        } else {
+          cloudErrorMsg = error.message || "";
+          console.warn("Advertencia al actualizar en Supabase:", error);
+        }
       } catch (e) {
+        cloudErrorMsg = e.message || "";
         console.warn("Error guardando en Supabase:", e);
       }
     }
 
+    // Guardar en memoria y caché local
+    const all = [...DB.getCotizaciones()];
+    const idx = all.findIndex(c => c.numero === record.numero);
+    if (idx >= 0) all[idx] = record;
+    else all.push(record);
+    DB.setCotizaciones(all);
+
     this._editingNumero = null;
     persistStateLocal();
 
-    toast(isEdit ? `Cotización ${record.numero} actualizada` : `Cotización ${record.numero} guardada`);
+    if (sb && !cloudSaved) {
+      toast(`⚠️ Cotización ${record.numero} guardada en este equipo, pero no se pudo sincronizar en la nube${cloudErrorMsg ? ": " + cloudErrorMsg : ""}`, true);
+    } else {
+      toast(isEdit ? `Cotización ${record.numero} actualizada` : `Cotización ${record.numero} guardada`);
+    }
 
     if (withPdf) {
       await this.writePdf(record);
@@ -2019,20 +2181,27 @@ const Cotizador = {
       iva: r.iva,
       total: r.total,
       items: r.items,
+      show_images: !!r.showImages,
       updated_at: new Date().toISOString()
     };
   },
 
   async remove(numero) {
-    DB.setCotizaciones(DB.getCotizaciones().filter(c => c.numero !== numero));
+    if (!confirm(`¿Estás seguro de que deseas eliminar la cotización ${numero}? Esta acción no se puede deshacer.`)) {
+      return;
+    }
     const sb = getSb();
     if (sb) {
       try {
-        await sb.from("cotizaciones").delete().eq("numero", numero);
+        const { error } = await sb.from("cotizaciones").delete().eq("numero", numero);
+        if (error) {
+          return toast(`No se pudo eliminar en la nube: ${error.message}`, true);
+        }
       } catch (e) {
-        console.warn("Error eliminando en Supabase:", e);
+        return toast("No se pudo eliminar en la nube: " + (e.message || e), true);
       }
     }
+    DB.setCotizaciones(DB.getCotizaciones().filter(c => c.numero !== numero));
     toast(`Cotización ${numero} eliminada`);
     Router.go("guardadas");
   },
@@ -2316,7 +2485,8 @@ const PdfBuilder = {
         } else if (c.key === "codigo") {
           doc.text(String(it.codigo || ""), colX + c.w / 2, textY, { align: "center" });
         } else if (c.key === "descripcion") {
-          doc.text(descLines, colX + 6, y + 11.5);
+          const descY = y + Math.max(8, (rowH - descLines.length * 10) / 2 + 8);
+          doc.text(descLines, colX + 6, descY);
         } else if (c.key === "cantidad") {
           doc.text(String(it.cantidad || 0), colX + c.w / 2, textY, { align: "center" });
         } else if (c.key === "vrUnitario") {
@@ -2369,12 +2539,7 @@ const PdfBuilder = {
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
 
-    const defaultObs =
-      "Favor consignar a: Bancolombia – Cuenta de Ahorros N.º 72600001670, a nombre de Representaciones M&M Medical SAS.\n\n" +
-      "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
-      "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
-
-    const obsText = (r.observaciones && r.observaciones.trim()) || defaultObs;
+    const obsText = (r.observaciones && r.observaciones.trim()) || DEFAULT_OBSERVACIONES;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.6);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
