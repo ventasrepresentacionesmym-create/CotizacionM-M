@@ -184,7 +184,7 @@ const DataSync = {
     const result = [];
     for (let b = 1; b < trBlocks.length; b++) {
       const block = trBlocks[b];
-      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)];
+      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<\/td>|<td|$)/gi)];
       if (!tdMatches.length) continue;
       result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
     }
@@ -528,6 +528,29 @@ function norm(s) {
   return String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+// Búsqueda inteligente y flexible: insensible a mayúsculas, tildes, espacios, guiones y con soporte multipalabra
+function matchSearch(text, query) {
+  const qNorm = norm(query).trim();
+  if (!qNorm) return false;
+  const tNorm = norm(text);
+  if (tNorm.includes(qNorm)) return true;
+
+  // Comparación ignorando separadores como espacios, guiones y puntos
+  const cleanQ = qNorm.replace(/[\s\-_.,/]/g, "");
+  const cleanT = tNorm.replace(/[\s\-_.,/]/g, "");
+  if (cleanQ && cleanT.includes(cleanQ)) return true;
+
+  // Búsqueda multipalabra (todas las palabras deben coincidir)
+  const tokens = qNorm.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    return tokens.every(tok => {
+      const cleanTok = tok.replace(/[\s\-_.,/]/g, "");
+      return tNorm.includes(tok) || (cleanTok && cleanT.includes(cleanTok));
+    });
+  }
+  return false;
+}
+
 function formatFechaHora(isoStr) {
   if (!isoStr) return "Sin registros previos";
   try {
@@ -828,49 +851,87 @@ const AppInit = {
     }
 
     try {
+      // Carga en paralelo de asesores, clientes, cotizaciones y productos
+      const [dbAsesoresRes, allClientes, allCotizaciones, productsRes] = await Promise.all([
+        sb.from("asesores").select("nombre").order("nombre"),
+        (async () => {
+          let clientes = [];
+          let fromC = 0;
+          const stepC = 1000;
+          let hasMoreC = true;
+          while (hasMoreC) {
+            const { data: chunkC, error: errC } = await sb.from("clientes")
+              .select("nombre, ciudad, nit")
+              .order("nombre")
+              .range(fromC, fromC + stepC - 1);
+            if (errC || !chunkC || !chunkC.length) {
+              hasMoreC = false;
+            } else {
+              clientes.push(...chunkC);
+              if (chunkC.length < stepC) hasMoreC = false;
+              else fromC += stepC;
+            }
+          }
+          return clientes;
+        })(),
+        (async () => {
+          let cotizaciones = [];
+          let fromCot = 0;
+          const stepCot = 1000;
+          let hasMoreCot = true;
+          while (hasMoreCot) {
+            const { data: chunkCot, error: errCot } = await sb.from("cotizaciones")
+              .select("*")
+              .order("created_at", { ascending: false })
+              .range(fromCot, fromCot + stepCot - 1);
+            if (errCot || !chunkCot || !chunkCot.length) {
+              hasMoreCot = false;
+            } else {
+              cotizaciones.push(...chunkCot);
+              if (chunkCot.length < stepCot) hasMoreCot = false;
+              else fromCot += stepCot;
+            }
+          }
+          return cotizaciones;
+        })(),
+        (async () => {
+          let products = [];
+          let from = 0;
+          const step = 1000;
+          let hasMore = true;
+          let latestUpdated = null;
+          while (hasMore) {
+            const { data: dbProd, error } = await sb.from("productos")
+              .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
+              .order("codigo", { ascending: true })
+              .range(from, from + step - 1);
+            if (error || !dbProd || !dbProd.length) {
+              hasMore = false;
+            } else {
+              products.push(...dbProd);
+              dbProd.forEach(p => {
+                if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
+                  latestUpdated = p.updated_at;
+                }
+              });
+              if (dbProd.length < step) hasMore = false;
+              else from += step;
+            }
+          }
+          return { products, latestUpdated };
+        })()
+      ]);
+
       // 1. Asesores
-      const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
-      STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
+      STATE.cyp.asesores = (dbAsesoresRes && dbAsesoresRes.data && Array.isArray(dbAsesoresRes.data))
+        ? dbAsesoresRes.data.map(a => a.nombre)
+        : [];
 
-      // 2. Clientes (paginado para cargar todos los miles de registros)
-      let allClientes = [];
-      let fromC = 0;
-      const stepC = 1000;
-      let hasMoreC = true;
-      while (hasMoreC) {
-        const { data: chunkC, error: errC } = await sb.from("clientes")
-          .select("nombre, ciudad, nit")
-          .order("nombre")
-          .range(fromC, fromC + stepC - 1);
-        if (errC || !chunkC || !chunkC.length) {
-          hasMoreC = false;
-        } else {
-          allClientes.push(...chunkC);
-          if (chunkC.length < stepC) hasMoreC = false;
-          else fromC += stepC;
-        }
-      }
-      STATE.cyp.clientes = allClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
+      // 2. Clientes
+      STATE.cyp.clientes = (allClientes || []).map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
 
-      // 3. Cotizaciones (paginado)
-      let allCotizaciones = [];
-      let fromCot = 0;
-      const stepCot = 1000;
-      let hasMoreCot = true;
-      while (hasMoreCot) {
-        const { data: chunkCot, error: errCot } = await sb.from("cotizaciones")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .range(fromCot, fromCot + stepCot - 1);
-        if (errCot || !chunkCot || !chunkCot.length) {
-          hasMoreCot = false;
-        } else {
-          allCotizaciones.push(...chunkCot);
-          if (chunkCot.length < stepCot) hasMoreCot = false;
-          else fromCot += stepCot;
-        }
-      }
-      STATE.cotizaciones = allCotizaciones.map(c => ({
+      // 3. Cotizaciones
+      STATE.cotizaciones = (allCotizaciones || []).map(c => ({
         numero: c.numero,
         fecha: c.fecha,
         cliente: c.cliente_nombre,
@@ -885,39 +946,13 @@ const AppInit = {
         subtotal: Number(c.subtotal) || 0,
         iva: Number(c.iva) || 0,
         total: Number(c.total) || 0,
-        // Bug #10 fix: leer showImages por cotización desde la nube
         showImages: !!c.show_images,
         items: c.items || []
       }));
 
       // 4. Productos
-      let allProducts = [];
-      let from = 0;
-      const step = 1000;
-      let hasMore = true;
-      let latestUpdated = null;
-
-      while (hasMore) {
-        const { data: dbProd, error } = await sb.from("productos")
-          .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
-          .order("updated_at", { ascending: false, nullsFirst: false })
-          .range(from, from + step - 1);
-        if (error || !dbProd || !dbProd.length) {
-          hasMore = false;
-        } else {
-          allProducts.push(...dbProd);
-          dbProd.forEach(p => {
-            if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
-              latestUpdated = p.updated_at;
-            }
-          });
-          if (dbProd.length < step) hasMore = false;
-          else from += step;
-        }
-      }
-
+      const allProducts = (productsRes && productsRes.products) || [];
       STATE.datos = allProducts.map(p => {
-        // Bug #5 fix: normalizar iva_pct siempre como fracción (0.19), por si llega como entero (19)
         const rawIva = Number(p.iva_pct) || 0;
         const ivaPct = rawIva > 1 ? rawIva / 100 : rawIva;
         return [
@@ -930,8 +965,8 @@ const AppInit = {
         ];
       });
 
-      if (latestUpdated) {
-        STATE.lastUpdate = latestUpdated;
+      if (productsRes && productsRes.latestUpdated) {
+        STATE.lastUpdate = productsRes.latestUpdated;
       } else if (allProducts.length === 0) {
         STATE.lastUpdate = null;
       }
@@ -939,7 +974,6 @@ const AppInit = {
       persistStateLocal();
       console.log(`✅ Conectado a Supabase: ${STATE.datos.length} productos, ${STATE.cyp.clientes.length} clientes, ${STATE.cyp.asesores.length} asesores, ${STATE.cotizaciones.length} cotizaciones.`);
 
-      // Bug #12 fix: actualizar badge de conexión al estado real
       if (badge) {
         badge.innerHTML = '<span class="cloud-dot"></span> Supabase · Conectado';
         badge.style.color = "";
@@ -948,7 +982,6 @@ const AppInit = {
       }
     } catch (e) {
       console.error("Error sincronizando con Supabase:", e);
-      // Bug #12 fix: badge rojo cuando hay error de conexión
       if (badge) {
         badge.innerHTML = '<span class="cloud-dot" style="background:#dc2626"></span> Error de conexión';
         badge.style.color = "#991b1b";
@@ -958,56 +991,66 @@ const AppInit = {
     }
   },
 
-  // Bug #9 fix: recarga solo catálogo (productos + clientes + asesores) sin tocar cotizaciones en edición
+  // Recarga solo catálogo (productos + clientes + asesores) sin tocar cotizaciones en edición
   async bootCatalog() {
     const sb = getSb();
     if (!sb) return;
     try {
-      const { data: dbAsesores } = await sb.from("asesores").select("nombre").order("nombre");
-      STATE.cyp.asesores = (dbAsesores && Array.isArray(dbAsesores)) ? dbAsesores.map(a => a.nombre) : [];
-
-      let allClientes = [];
-      let fromC = 0;
-      let hasMoreC = true;
-      while (hasMoreC) {
-        const { data: chunkC, error: errC } = await sb.from("clientes")
-          .select("nombre, ciudad, nit").order("nombre").range(fromC, fromC + 999);
-        if (errC || !chunkC || !chunkC.length) { hasMoreC = false; }
-        else {
-          allClientes.push(...chunkC);
-          if (chunkC.length < 1000) hasMoreC = false;
-          else fromC += 1000;
-        }
-      }
-      STATE.cyp.clientes = allClientes.map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
-
-      let allProducts = [];
-      let from = 0;
-      let hasMore = true;
-      let latestUpdated = null;
-      while (hasMore) {
-        const { data: dbProd, error } = await sb.from("productos")
-          .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
-          .order("updated_at", { ascending: false, nullsFirst: false })
-          .range(from, from + 999);
-        if (error || !dbProd || !dbProd.length) { hasMore = false; }
-        else {
-          allProducts.push(...dbProd);
-          dbProd.forEach(p => {
-            if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
-              latestUpdated = p.updated_at;
+      const [dbAsesoresRes, allClientes, productsRes] = await Promise.all([
+        sb.from("asesores").select("nombre").order("nombre"),
+        (async () => {
+          let clientes = [];
+          let fromC = 0;
+          let hasMoreC = true;
+          while (hasMoreC) {
+            const { data: chunkC, error: errC } = await sb.from("clientes")
+              .select("nombre, ciudad, nit").order("nombre").range(fromC, fromC + 999);
+            if (errC || !chunkC || !chunkC.length) { hasMoreC = false; }
+            else {
+              clientes.push(...chunkC);
+              if (chunkC.length < 1000) hasMoreC = false;
+              else fromC += 1000;
             }
-          });
-          if (dbProd.length < 1000) hasMore = false;
-          else from += 1000;
-        }
-      }
+          }
+          return clientes;
+        })(),
+        (async () => {
+          let products = [];
+          let from = 0;
+          let hasMore = true;
+          let latestUpdated = null;
+          while (hasMore) {
+            const { data: dbProd, error } = await sb.from("productos")
+              .select("codigo, descripcion, iva_pct, existencia, costo, proveedor, updated_at")
+              .order("codigo", { ascending: true })
+              .range(from, from + 999);
+            if (error || !dbProd || !dbProd.length) { hasMore = false; }
+            else {
+              products.push(...dbProd);
+              dbProd.forEach(p => {
+                if (p && p.updated_at && (!latestUpdated || String(p.updated_at) > String(latestUpdated))) {
+                  latestUpdated = p.updated_at;
+                }
+              });
+              if (dbProd.length < 1000) hasMore = false;
+              else from += 1000;
+            }
+          }
+          return { products, latestUpdated };
+        })()
+      ]);
+
+      STATE.cyp.asesores = (dbAsesoresRes && dbAsesoresRes.data && Array.isArray(dbAsesoresRes.data))
+        ? dbAsesoresRes.data.map(a => a.nombre) : [];
+      STATE.cyp.clientes = (allClientes || []).map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
+
+      const allProducts = (productsRes && productsRes.products) || [];
       STATE.datos = allProducts.map(p => {
         const rawIva = Number(p.iva_pct) || 0;
         return [p.codigo, p.descripcion, rawIva > 1 ? rawIva / 100 : rawIva,
           Number(p.existencia) || 0, Number(p.costo) || 0, p.proveedor || ""];
       });
-      if (latestUpdated) STATE.lastUpdate = latestUpdated;
+      if (productsRes && productsRes.latestUpdated) STATE.lastUpdate = productsRes.latestUpdated;
       persistStateLocal();
     } catch (e) {
       console.error("Error recargando catálogo:", e);
@@ -1694,7 +1737,7 @@ Views.renderNueva = function (numeroToLoad) {
 
   attachAutocomplete(
     document.getElementById("f_cliente"), document.getElementById("ac_cliente"),
-    q => DB.getCYP().clientes.filter(c => (c.cliente && norm(c.cliente).includes(q)) || (c.nit && norm(c.nit).includes(q))),
+    q => DB.getCYP().clientes.filter(c => matchSearch((c.cliente || "") + " " + (c.nit || "") + " " + (c.ciudad || ""), q)),
     c => `<div class="c1">${esc(c.cliente)}</div><div class="c2">${esc(c.nit || "")} · ${esc(c.ciudad || "")}</div>`,
     c => {
       document.getElementById("f_cliente").value = c.cliente;
@@ -1872,7 +1915,7 @@ const ItemsUI = {
 
       const getProducts = q => {
         const datos = DB.getDatos();
-        return datos.filter(d => (d[0] && norm(d[0]).includes(q)) || (d[1] && norm(d[1]).includes(q)));
+        return datos.filter(d => matchSearch((d[0] || "") + " " + (d[1] || "") + " " + (d[5] || ""), q));
       };
 
       if (codInput && acCodList) attachAutocomplete(codInput, acCodList, getProducts, renderProductItem, onPickProduct, "ac-prod-card");
