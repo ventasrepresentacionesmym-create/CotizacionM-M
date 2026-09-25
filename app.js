@@ -184,38 +184,133 @@ const DataSync = {
     const result = [];
     for (let b = 1; b < trBlocks.length; b++) {
       const block = trBlocks[b];
-      const tdMatches = [...block.matchAll(/<td[^>]*>([\s\S]*?)(?=<\/td>|<td|$)/gi)];
+      const tdMatches = [...block.matchAll(/<t[dh][^>]*>([\s\S]*?)(?=<\/t[dh]>|<t[dh]|$)/gi)];
       if (!tdMatches.length) continue;
       result.push(tdMatches.map(m => m[1].replace(/<[^>]+>/g, "").trim()));
     }
     return result;
   },
 
-  parseProductos(html) {
-    const rows = this.parseHtmlRows(html);
-    const mapProd = new Map();
-    for (const cells of rows) {
-      if (cells.length < 13) continue;
-      const colA = cells[0], colB = cells[1], colD = cells[3], colM = cells[12];
-      if (!colB || /^TOTAL/i.test(colA) || /TOTAL/i.test(colB)) continue;
-      if (!colA.includes("|")) continue;
-      const codigo = colA.split("|")[0].trim();
-      if (!codigo) continue;
-      const ivaPct = (colD && (colD.startsWith("B") || colD.includes("19"))) ? 0.19 : 0;
-      const costo = Number(String(colM || "").replace(/\./g, "").replace(",", ".")) || 0;
-      const proveedor = cells[4] || "";
+  toFloat(v) {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === "number") return v;
+    let s = String(v).trim();
+    if (!s) return 0;
+    if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+    const f = parseFloat(s);
+    return isNaN(f) ? 0 : f;
+  },
 
-      if (!mapProd.has(codigo)) {
-        mapProd.set(codigo, { codigo, descripcion: colB, iva_pct: ivaPct, existencia: 0, costo, proveedor });
-      } else {
-        const ex = mapProd.get(codigo);
-        if (costo > ex.costo) {
-          ex.costo = costo;
-          if (!ex.proveedor && proveedor) ex.proveedor = proveedor;
+  colIndex(header, names) {
+    const nameList = Array.isArray(names) ? names.map(n => n.toLowerCase().trim()) : [names.toLowerCase().trim()];
+    return header.findIndex(h => {
+      const normH = h.toLowerCase().trim();
+      return nameList.some(n => normH === n || normH.includes(n));
+    });
+  },
+
+  findHeaderRow(rows, mustHaveAnyOf) {
+    const wanted = mustHaveAnyOf.map(w => w.toLowerCase());
+    for (let i = 0; i < rows.length; i++) {
+      const lc = rows[i].map(c => c.toLowerCase().trim());
+      if (wanted.some(w => lc.includes(w))) return i;
+    }
+    return -1;
+  },
+
+  extractTable(html, headerHints) {
+    const rows = this.parseHtmlRows(html);
+    const idx = this.findHeaderRow(rows, headerHints);
+    if (idx === -1) return { header: [], body: rows };
+    return { header: rows[idx], body: rows.slice(idx + 1) };
+  },
+
+  // Genera el catálogo unificado combinando Artículos (catálogo maestro histórico) y Existencias (costos recientes)
+  parseCatalog(htmlArticulos, htmlExistencias) {
+    const products = new Map();
+
+    // 1. Catálogo base completo (Listado_de_articulos)
+    if (htmlArticulos) {
+      const art = this.extractTable(htmlArticulos, ["codigo", "id", "articulo"]);
+      const aiCodigo = this.colIndex(art.header, "codigo");
+      const aiNombre = this.colIndex(art.header, "nombre");
+      const aiProv = this.colIndex(art.header, "proveedor");
+      const aiIva = this.colIndex(art.header, ["% iva", "iva"]);
+
+      for (const r of art.body) {
+        if (r.length <= Math.max(aiCodigo, aiNombre)) continue;
+        const codigo = (r[aiCodigo] || "").trim();
+        const nombre = (r[aiNombre] || "").trim();
+        if (!codigo || !nombre || /^codigo/i.test(codigo) || /registro\(s\)/i.test(codigo) || /^TOTAL/i.test(codigo)) continue;
+        const proveedor = aiProv !== -1 ? (r[aiProv] || "").trim() : "";
+        let ivaPct = 0;
+        if (aiIva !== -1) {
+          const ivaVal = (r[aiIva] || "").toUpperCase();
+          if (ivaVal.includes("19") || ivaVal.includes("B")) ivaPct = 0.19;
+        }
+        products.set(codigo, {
+          codigo,
+          descripcion: nombre,
+          iva_pct: ivaPct,
+          existencia: 0,
+          costo: 0,
+          proveedor
+        });
+      }
+    }
+
+    // 2. Existencias y costos (Resumen_de_existencias_UC)
+    if (htmlExistencias) {
+      const exi = this.extractTable(htmlExistencias, ["articulo", "promedio", "costo"]);
+      const eiArticulo = this.colIndex(exi.header, "articulo");
+      const eiNombre = this.colIndex(exi.header, "nombre");
+      const eiProv = this.colIndex(exi.header, "proveedor");
+      const eiIva = this.colIndex(exi.header, "iva");
+      const eiProm = this.colIndex(exi.header, ["promedio", "costo"]);
+
+      for (const r of exi.body) {
+        if (r.length <= Math.max(eiArticulo, 0)) continue;
+        const raw = (r[eiArticulo !== -1 ? eiArticulo : 0] || "").trim();
+        if (!raw || /registro\(s\)/i.test(raw) || /^TOTAL/i.test(raw)) continue;
+
+        let codigo = raw;
+        if (raw.includes("|")) codigo = raw.split("|")[0].trim();
+        if (!codigo || /^articulo/i.test(codigo)) continue;
+
+        const nombre = eiNombre !== -1 ? (r[eiNombre] || "").trim() : (r[1] || "").trim();
+        const proveedor = eiProv !== -1 ? (r[eiProv] || "").trim() : (r[4] || "").trim();
+        let ivaPct = 0;
+        if (eiIva !== -1) {
+          const rawIva = (r[eiIva] || "").toUpperCase();
+          if (rawIva.includes("19") || rawIva.startsWith("B")) ivaPct = 0.19;
+        }
+        let costo = 0;
+        if (eiProm !== -1) {
+          costo = this.toFloat(r[eiProm]);
+        } else if (r.length >= 13) {
+          costo = this.toFloat(r[12]);
+        }
+
+        if (!products.has(codigo)) {
+          products.set(codigo, {
+            codigo,
+            descripcion: nombre || codigo,
+            iva_pct: ivaPct,
+            existencia: 0,
+            costo,
+            proveedor
+          });
+        } else {
+          const p = products.get(codigo);
+          if (costo > p.costo) p.costo = costo;
+          if (!p.proveedor && proveedor) p.proveedor = proveedor;
+          if (!p.iva_pct && ivaPct) p.iva_pct = ivaPct;
+          if (nombre && !p.descripcion) p.descripcion = nombre;
         }
       }
     }
-    return Array.from(mapProd.values());
+
+    return Array.from(products.values());
   },
 
   parseClientes(html) {
@@ -223,10 +318,10 @@ const DataSync = {
     const clientes = [];
     for (const cells of rows) {
       if (cells.length < 6) continue;
-      let nombre = (cells[1] || "").replace(/^[,"\s]+/, "").trim();
+      let nombre = (cells[1] || "").replace(/^[, \t\r\n]+/, "").trim();
       const ciudad = (cells[3] || "").trim();
       const nit = (cells[5] || "").trim();
-      if (!nombre) continue;
+      if (!nombre || /^TOTAL/i.test(nombre) || /^Directorio/i.test(nombre)) continue;
       clientes.push({ nombre, ciudad, nit });
     }
     return clientes;
@@ -251,8 +346,20 @@ const DataSync = {
 
     onProgress({ pct: 5, msg: `Buscando archivos en carpeta "${dirHandle.name}"...` });
 
+    let fileHandleArt = null;
     let fileHandleProd = null;
     let fileHandleClie = null;
+
+    try {
+      fileHandleArt = await dirHandle.getFileHandle("Listado_de_articulos.xls");
+    } catch {
+      for await (const [name, handle] of dirHandle.entries()) {
+        if (handle.kind === "file" && /listado.*articulos.*\.xls/i.test(name)) {
+          fileHandleArt = handle;
+          break;
+        }
+      }
+    }
 
     try {
       fileHandleProd = await dirHandle.getFileHandle("Resumen_de_existencias_UC.xls");
@@ -276,25 +383,42 @@ const DataSync = {
       }
     }
 
-    if (!fileHandleProd) {
-      throw new Error(`No se encontró el archivo "Resumen_de_existencias_UC.xls" en la carpeta "${dirHandle.name}".`);
+    if (!fileHandleArt && !fileHandleProd) {
+      throw new Error(`No se encontró ni "Listado_de_articulos.xls" ni "Resumen_de_existencias_UC.xls" en la carpeta "${dirHandle.name}".`);
     }
     if (!fileHandleClie) {
       throw new Error(`No se encontró el archivo "Directorio.xls" en la carpeta "${dirHandle.name}".`);
     }
 
     onProgress({ pct: 15, msg: "Leyendo archivos de Excel..." });
-    const htmlProd = await this.readFileFromHandle(fileHandleProd);
+    const htmlArt = fileHandleArt ? await this.readFileFromHandle(fileHandleArt) : null;
+    const htmlProd = fileHandleProd ? await this.readFileFromHandle(fileHandleProd) : null;
     const htmlClie = await this.readFileFromHandle(fileHandleClie);
 
-    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
+    return await this.uploadToSupabase(htmlArt, htmlProd, htmlClie, onProgress);
   },
 
-  async syncFromFiles(fileProd, fileClie, onProgress) {
-    onProgress({ pct: 10, msg: "Leyendo archivos seleccionados..." });
-    const htmlProd = await this.readFileFromInput(fileProd);
+  async syncFromFiles(files, onProgress) {
+    onProgress({ pct: 10, msg: "Analizando archivos seleccionados..." });
+    const fileList = Array.from(files || []);
+
+    const fileArt = fileList.find(f => /listado.*articulos/i.test(f.name) || /articulos/i.test(f.name));
+    const fileProd = fileList.find(f => /resumen.*existencias/i.test(f.name) || /existencias/i.test(f.name));
+    const fileClie = fileList.find(f => /directorio/i.test(f.name) || /clientes/i.test(f.name));
+
+    if (!fileArt && !fileProd) {
+      throw new Error("Debes incluir al menos 'Listado_de_articulos.xls' o 'Resumen_de_existencias_UC.xls'");
+    }
+    if (!fileClie) {
+      throw new Error("Debes incluir el archivo de clientes 'Directorio.xls'");
+    }
+
+    onProgress({ pct: 15, msg: "Leyendo contenido de los archivos..." });
+    const htmlArt = fileArt ? await this.readFileFromInput(fileArt) : null;
+    const htmlProd = fileProd ? await this.readFileFromInput(fileProd) : null;
     const htmlClie = await this.readFileFromInput(fileClie);
-    return await this.uploadToSupabase(htmlProd, htmlClie, onProgress);
+
+    return await this.uploadToSupabase(htmlArt, htmlProd, htmlClie, onProgress);
   },
 
   async _fetchTable(table) {
@@ -342,15 +466,15 @@ const DataSync = {
     }
   },
 
-  async uploadToSupabase(htmlProd, htmlClie, onProgress) {
+  async uploadToSupabase(htmlArt, htmlProd, htmlClie, onProgress) {
     const sb = getSb();
     if (!sb) throw new Error("No hay conexión con Supabase.");
 
     onProgress({ pct: 20, msg: "Procesando productos y clientes..." });
-    const productos = this.parseProductos(htmlProd);
+    const productos = this.parseCatalog(htmlArt, htmlProd);
     const clientes = this.parseClientes(htmlClie);
 
-    if (!productos.length) throw new Error("No se encontraron productos válidos en el archivo de existencias.");
+    if (!productos.length) throw new Error("No se encontraron productos válidos en los archivos de catálogo.");
     if (!clientes.length) throw new Error("No se encontraron clientes válidos en el archivo de directorio.");
 
     onProgress({ pct: 26, msg: "Respaldando información actual..." });
@@ -375,7 +499,7 @@ const DataSync = {
         const pct = 30 + Math.round((processedRecords / totalRecords) * 60);
         onProgress({
           pct,
-          msg: `Subiendo productos (${done.toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
+          msg: `Subiendo catálogo de productos (${done.toLocaleString("es-CO")}/${productos.length.toLocaleString("es-CO")})...`
         });
       });
 
@@ -1119,7 +1243,7 @@ Views.renderActualizarExcel = async function () {
           ${folderName ? `<span class="sync-folder-info" id="badgeFolderName">📁 Carpeta: ${esc(folderName)}</span>` : `<span class="sync-folder-info" id="badgeFolderName" style="display:none"></span>`}
         </div>
         <div class="sync-desc">
-          Coloca los archivos <b>Resumen_de_existencias_UC.xls</b> y <b>Directorio.xls</b> en la carpeta compartida y presiona el botón para sincronizar la base de datos de inmediato.
+          Coloca los archivos <b>Listado_de_articulos.xls</b> (catálogo completo con y sin existencias), <b>Resumen_de_existencias_UC.xls</b> (costos y existencias) y <b>Directorio.xls</b> (clientes) en la carpeta y presiona el botón para sincronizar.
         </div>
 
         <div class="sync-progress-wrap" id="syncProgressWrap">
@@ -1232,18 +1356,11 @@ Views.renderActualizarExcel = async function () {
       const files = Array.from(e.target.files || []);
       if (!files.length) return;
 
-      const fileProd = files.find(f => /resumen.*existencias/i.test(f.name) || /existencias/i.test(f.name));
-      const fileClie = files.find(f => /directorio/i.test(f.name) || /clientes/i.test(f.name));
-
-      if (!fileProd || !fileClie) {
-        return toast("Debes seleccionar ambos archivos: 'Resumen_de_existencias_UC.xls' y 'Directorio.xls'", true);
-      }
-
       if (btnSync) btnSync.disabled = true;
       if (btnReload) btnReload.disabled = true;
 
       try {
-        const result = await DataSync.syncFromFiles(fileProd, fileClie, ({ pct, msg }) => showProgress(pct, msg));
+        const result = await DataSync.syncFromFiles(files, ({ pct, msg }) => showProgress(pct, msg));
         refreshMetrics();
         toast(`✅ ¡Éxito! Sincronizados ${result.productos.toLocaleString("es-CO")} productos y ${result.clientes.toLocaleString("es-CO")} clientes.`);
       } catch (err) {
