@@ -548,6 +548,7 @@ function persistStateLocal() {
       ...STATE,
       cotizaciones: (STATE.cotizaciones || []).map(c => ({
         ...c,
+        showImages: Boolean(c.showImages || (Array.isArray(c.items) && c.items.some(it => it.imagen && String(it.imagen).trim().length > 0))),
         items: (c.items || []).map(it => ({ ...it, imagen: "" }))
       }))
     };
@@ -1055,24 +1056,27 @@ const AppInit = {
       STATE.cyp.clientes = (allClientes || []).map(c => ({ cliente: c.nombre, ciudad: c.ciudad, nit: c.nit }));
 
       // 3. Cotizaciones
-      STATE.cotizaciones = (allCotizaciones || []).map(c => ({
-        numero: c.numero,
-        fecha: c.fecha,
-        cliente: c.cliente_nombre,
-        nit: c.cliente_nit,
-        ciudad: c.cliente_ciudad,
-        contacto: c.contacto || "",
-        asesor: c.asesor_nombre,
-        tiempoEntrega: c.tiempo_entrega,
-        formaPago: c.forma_pago,
-        validez: c.validez,
-        observaciones: c.observaciones,
-        subtotal: Number(c.subtotal) || 0,
-        iva: Number(c.iva) || 0,
-        total: Number(c.total) || 0,
-        showImages: !!c.show_images,
-        items: c.items || []
-      }));
+      STATE.cotizaciones = (allCotizaciones || []).map(c => {
+        const hasItemImages = Array.isArray(c.items) && c.items.some(it => it.imagen && String(it.imagen).trim().length > 0);
+        return {
+          numero: c.numero,
+          fecha: c.fecha,
+          cliente: c.cliente_nombre,
+          nit: c.cliente_nit,
+          ciudad: c.cliente_ciudad,
+          contacto: c.contacto || "",
+          asesor: c.asesor_nombre,
+          tiempoEntrega: c.tiempo_entrega,
+          formaPago: c.forma_pago,
+          validez: c.validez,
+          observaciones: c.observaciones,
+          subtotal: Number(c.subtotal) || 0,
+          iva: Number(c.iva) || 0,
+          total: Number(c.total) || 0,
+          showImages: Boolean(c.show_images === true || hasItemImages),
+          items: c.items || []
+        };
+      });
 
       // 4. Productos
       const allProducts = (productsRes && productsRes.products) || [];
@@ -1704,17 +1708,19 @@ Views.renderNueva = function (numeroToLoad) {
   const _now = new Date();
   const hoy = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
 
-  // Bug fix: determinar showImages exactamente para la cotización actual
+  // Determinar showImages exactamente para la cotización actual
   let showImages = false;
   if (source) {
-    if (typeof source.showImages === "boolean") {
-      showImages = source.showImages;
-    } else if (source.items && Array.isArray(source.items) && source.items.some(it => it.imagen && String(it.imagen).trim().length > 0)) {
+    const hasItemImage = Array.isArray(source.items) && source.items.some(it => it.imagen && String(it.imagen).trim().length > 0);
+    if (hasItemImage) {
+      showImages = true;
+    } else if (source.showImages === true) {
       showImages = true;
     } else {
       showImages = false;
     }
   } else {
+    // Para una nueva cotización: usar la última preferencia del usuario
     showImages = Boolean(STATE.config && STATE.config.showImages);
   }
   ItemsUI.showImages = showImages;
@@ -1831,7 +1837,9 @@ Views.renderNueva = function (numeroToLoad) {
   if (toggleImg) {
     toggleImg.addEventListener("change", (e) => {
       const checked = e.target.checked;
-      if (!isEdit) {
+      if (isEdit && source) {
+        source.showImages = checked;
+      } else {
         STATE.config = STATE.config || {};
         STATE.config.showImages = checked;
         persistStateLocal();
@@ -2244,7 +2252,8 @@ const Cotizador = {
     const isEdit = !!this._editingNumero;
     let numero = this._editingNumero || DB.nextNumero();
 
-    const record = { numero, ...data, showImages: !!data.showImages, items, subtotal, iva, total: subtotal + iva };
+    const isShowingImages = Boolean(data.showImages || items.some(it => it.imagen && String(it.imagen).trim().length > 0));
+    const record = { numero, ...data, showImages: isShowingImages, items, subtotal, iva, total: subtotal + iva };
 
     const sb = getSb();
     let cloudSaved = !sb ? false : false;
