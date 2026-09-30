@@ -2535,13 +2535,13 @@ const PdfBuilder = {
 
     let cols = [];
     if (showImages) {
-      const numW = 22;
-      const imgW = 96;
-      const codW = 54;
-      const cantW = 34;
-      const vuW = 70;
-      const ivaW = 38;
-      const vtW = 74;
+      const numW = 20;
+      const imgW = 75;
+      const codW = 76;
+      const cantW = 32;
+      const vuW = 68;
+      const ivaW = 36;
+      const vtW = 72;
       const descW = contentW - numW - imgW - codW - cantW - vuW - ivaW - vtW;
       cols = [
         { key: "num", label: "N°", w: numW, align: "center" },
@@ -2555,10 +2555,10 @@ const PdfBuilder = {
       ];
     } else {
       const numW = 24;
-      const codW = 58;
+      const codW = 76;
       const cantW = 36;
       const vuW = 72;
-      const ivaW = 42;
+      const ivaW = 40;
       const vtW = 76;
       const descW = contentW - numW - codW - cantW - vuW - ivaW - vtW;
       cols = [
@@ -2605,8 +2605,8 @@ const PdfBuilder = {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       const descLines = doc.splitTextToSize(String(it.descripcion || ""), (descCol ? descCol.w : 150) - 12);
-      const minRowH = (showImages && it.imagen) ? 62 : (showImages ? 30 : 20);
-      const rowH = Math.max(minRowH, 9 + descLines.length * 10);
+      const minRowH = (showImages && it.imagen) ? 58 : (showImages ? 28 : 20);
+      const rowH = Math.max(minRowH, 10 + descLines.length * 10);
 
       const yBefore = y;
       y = ensureSpace(y, rowH);
@@ -2622,8 +2622,8 @@ const PdfBuilder = {
 
       doc.setTextColor(...textDark);
 
-      // Posición vertical del texto de una línea: centrado verticalmente
-      const textY = y + Math.max(12, Math.min(rowH / 2 + 3.5, 14));
+      // Posición vertical del texto de una línea: centrado verticalmente exacto
+      const textY = y + rowH / 2 + 3;
 
       cols.forEach(c => {
         const colIdx = cols.indexOf(c);
@@ -2634,18 +2634,25 @@ const PdfBuilder = {
         } else if (c.key === "imagen") {
           if (it.imagen) {
             try {
-              const imgW = 84;
-              const imgH = 58;
+              const maxW = c.w - 10;
+              const maxH = rowH - 8;
+              let imgW = maxW, imgH = maxH;
+              if (doc.getImageProperties) {
+                const props = doc.getImageProperties(it.imagen);
+                if (props && props.width && props.height) {
+                  const ratio = Math.min(maxW / props.width, maxH / props.height);
+                  imgW = props.width * ratio;
+                  imgH = props.height * ratio;
+                }
+              }
               const ix = colX + (c.w - imgW) / 2;
               const iy = y + (rowH - imgH) / 2;
               doc.addImage(it.imagen, "JPEG", ix, iy, imgW, imgH, undefined, "FAST");
             } catch (e1) {
               try {
-                const imgW = 84;
-                const imgH = 58;
-                const ix = colX + (c.w - imgW) / 2;
-                const iy = y + (rowH - imgH) / 2;
-                doc.addImage(it.imagen, "PNG", ix, iy, imgW, imgH, undefined, "FAST");
+                const ix = colX + 5;
+                const iy = y + 4;
+                doc.addImage(it.imagen, "PNG", ix, iy, c.w - 10, rowH - 8, undefined, "FAST");
               } catch (e2) {
                 console.warn("Error agregando imagen a PDF:", e2);
               }
@@ -2654,7 +2661,7 @@ const PdfBuilder = {
         } else if (c.key === "codigo") {
           doc.text(String(it.codigo || ""), colX + c.w / 2, textY, { align: "center" });
         } else if (c.key === "descripcion") {
-          const descY = y + Math.max(8, (rowH - descLines.length * 10) / 2 + 8);
+          const descY = y + (rowH - descLines.length * 10) / 2 + 7.5;
           doc.text(descLines, colX + 6, descY);
         } else if (c.key === "cantidad") {
           doc.text(String(it.cantidad || 0), colX + c.w / 2, textY, { align: "center" });
