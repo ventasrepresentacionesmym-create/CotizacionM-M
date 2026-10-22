@@ -1661,17 +1661,36 @@ Views.renderGuardadas = function () {
     }
 
     list.innerHTML = cots.map(c => `
-      <div class="list-row" data-numero="${esc(c.numero)}">
+      <div class="list-row" data-numero="${esc(c.numero)}" style="position:relative;">
         <span class="n">${esc(c.numero)}</span>
         <span>${esc(c.cliente || "—")}</span>
         <span>${esc(c.fecha || "")}</span>
         <span>${esc(c.asesor || "—")}</span>
         <span style="font-family:var(--mono);font-weight:700;color:var(--azul-950);text-align:right">${fmtCOP(c.total)}</span>
+        <button class="btn-dup" data-dup="${esc(c.numero)}" title="Duplicar esta cotización con el siguiente número consecutivo"
+          style="opacity:0;transition:opacity 0.15s;font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:4px;">
+          📋 Duplicar
+        </button>
       </div>
     `).join("");
 
     list.querySelectorAll(".list-row[data-numero]").forEach(row => {
-      row.addEventListener("click", () => Router.go("nueva", { record: row.dataset.numero }));
+      const dupBtn = row.querySelector(".btn-dup");
+
+      row.addEventListener("mouseenter", () => { if (dupBtn) dupBtn.style.opacity = "1"; });
+      row.addEventListener("mouseleave", () => { if (dupBtn) dupBtn.style.opacity = "0"; });
+
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".btn-dup")) return;
+        Router.go("nueva", { record: row.dataset.numero });
+      });
+
+      if (dupBtn) {
+        dupBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          Cotizador.duplicate(dupBtn.dataset.dup);
+        });
+      }
     });
   }
 
@@ -1829,6 +1848,7 @@ Views.renderNueva = function (numeroToLoad) {
       <button class="btn btn-ghost" onclick="Cotizador.save(false)">${isEdit ? "Guardar cambios" : "Guardar cotización"}</button>
       <button class="btn btn-accent" onclick="Cotizador.save(true)">${isEdit ? "Guardar cambios y descargar PDF" : "Guardar y generar PDF"}</button>
       ${isEdit ? `<button class="btn btn-danger" id="btnEliminar">Eliminar cotización</button>` : ""}
+      ${isEdit ? `<button class="btn btn-ghost" id="btnDuplicar" style="border-color:#bae6fd;color:#0369a1;">📋 Duplicar cotización</button>` : ""}
       <button class="btn btn-ghost" onclick="Router.go('guardadas')" style="margin-left:auto">Ver cotizaciones guardadas</button>
     </div>
   `;
@@ -1858,6 +1878,11 @@ Views.renderNueva = function (numeroToLoad) {
   const btnEliminar = document.getElementById("btnEliminar");
   if (btnEliminar && isEdit) {
     btnEliminar.addEventListener("click", () => Cotizador.remove(existing.numero));
+  }
+
+  const btnDuplicar = document.getElementById("btnDuplicar");
+  if (btnDuplicar && isEdit) {
+    btnDuplicar.addEventListener("click", () => Cotizador.duplicate(existing.numero));
   }
 
   attachAutocomplete(
@@ -2353,6 +2378,59 @@ const Cotizador = {
       show_images: !!r.showImages,
       updated_at: new Date().toISOString()
     };
+  },
+
+  async duplicate(numero) {
+    const source = DB.getCotizaciones().find(c => c.numero === numero);
+    if (!source) return toast("No se encontró la cotización para duplicar.", true);
+
+    const newNumero = DB.nextNumero();
+    const _now = new Date();
+    const hoy = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
+
+    // Clonar profundo (sin referencia a la original)
+    const copy = JSON.parse(JSON.stringify(source));
+    copy.numero = newNumero;
+    copy.fecha = hoy;
+
+    const sb = getSb();
+    let cloudSaved = false;
+    let cloudErrorMsg = "";
+
+    if (sb) {
+      let row = this.toDbRow(copy);
+      for (let t = 0; t < 50; t++) {
+        let { error } = await sb.from("cotizaciones").insert(row);
+        if (!error) { cloudSaved = true; break; }
+        const msg = error.message || "";
+        if (error.code === "23505") {
+          copy.numero = bumpNumero(copy.numero);
+          row = this.toDbRow(copy);
+        } else if (/contacto/i.test(msg)) {
+          delete row.contacto;
+        } else if (/show_images/i.test(msg)) {
+          delete row.show_images;
+        } else {
+          cloudErrorMsg = msg;
+          console.warn("Error duplicando en Supabase:", error);
+          break;
+        }
+      }
+    }
+
+    // Guardar en memoria local
+    const all = [...DB.getCotizaciones()];
+    all.push(copy);
+    DB.setCotizaciones(all);
+
+    if (sb && !cloudSaved) {
+      toast(`⚠️ Cotización ${copy.numero} duplicada localmente, pero no se pudo guardar en la nube${cloudErrorMsg ? ": " + cloudErrorMsg : ""}`, true);
+    } else {
+      toast(`✅ Cotización duplicada como ${copy.numero}`);
+    }
+
+    // Abrir la copia para que el usuario pueda editarla de inmediato
+    Router.go("nueva", { record: copy.numero });
   },
 
   async remove(numero) {
