@@ -1661,36 +1661,17 @@ Views.renderGuardadas = function () {
     }
 
     list.innerHTML = cots.map(c => `
-      <div class="list-row" data-numero="${esc(c.numero)}" style="position:relative;">
+      <div class="list-row" data-numero="${esc(c.numero)}">
         <span class="n">${esc(c.numero)}</span>
         <span>${esc(c.cliente || "—")}</span>
         <span>${esc(c.fecha || "")}</span>
         <span>${esc(c.asesor || "—")}</span>
         <span style="font-family:var(--mono);font-weight:700;color:var(--azul-950);text-align:right">${fmtCOP(c.total)}</span>
-        <button class="btn-dup" data-dup="${esc(c.numero)}" title="Duplicar esta cotización con el siguiente número consecutivo"
-          style="opacity:0;transition:opacity 0.15s;font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:4px;">
-          📋 Duplicar
-        </button>
       </div>
     `).join("");
 
     list.querySelectorAll(".list-row[data-numero]").forEach(row => {
-      const dupBtn = row.querySelector(".btn-dup");
-
-      row.addEventListener("mouseenter", () => { if (dupBtn) dupBtn.style.opacity = "1"; });
-      row.addEventListener("mouseleave", () => { if (dupBtn) dupBtn.style.opacity = "0"; });
-
-      row.addEventListener("click", (e) => {
-        if (e.target.closest(".btn-dup")) return;
-        Router.go("nueva", { record: row.dataset.numero });
-      });
-
-      if (dupBtn) {
-        dupBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          Cotizador.duplicate(dupBtn.dataset.dup);
-        });
-      }
+      row.addEventListener("click", () => Router.go("nueva", { record: row.dataset.numero }));
     });
   }
 
