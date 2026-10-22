@@ -608,6 +608,9 @@ const DEFAULT_OBSERVACIONES =
   "No somos grandes contribuyentes ni autorretenedores de renta.\n\n" +
   "Somos grandes contribuyentes de ICA en Bucaramanga – Res. 1017 del 31/05/2021. Favor no practicar ReteICA en otros municipios.";
 
+const DEFAULT_OBSERVACIONES_PRODUCTOS =
+  "Garantía: 1 Año para equipos, 3 Meses para accesorios. Para elementos desechables y/o consumibles solo aplica garantía por defectos de fabricación. La garantía no incluye daños de elementos por desgaste natural, descuido, manipulación o uso indebido y pierde validez si los equipos son reparados, modificados o alterados.";
+
 function toast(msg, isError) {
   const t = document.getElementById("toast");
   if (!t) return;
@@ -1830,10 +1833,14 @@ Views.renderNueva = function (numeroToLoad) {
 
     <div class="card">
       <label>Observación de los productos <span style="font-weight:normal;color:#64748b;font-size:12px;">(opcional)</span></label>
-      <textarea id="f_obs_productos" rows="2" placeholder="Observaciones o notas adicionales sobre los productos (opcional)..." style="min-height:55px;">${esc(source ? (source.observacionesProductos || (function(){
+      <textarea id="f_obs_productos" rows="3" placeholder="Observaciones o notas adicionales sobre los productos..." style="min-height:65px;">${esc((function(){
+        if (!source) return DEFAULT_OBSERVACIONES_PRODUCTOS;
+        if (source.observacionesProductos !== undefined && source.observacionesProductos !== null) {
+          return source.observacionesProductos;
+        }
         const m = String(source.observaciones || "").match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
-        return m ? m[1].trim() : "";
-      })()) : "")}</textarea>
+        return m ? m[1].trim() : DEFAULT_OBSERVACIONES_PRODUCTOS;
+      })())}</textarea>
     </div>
 
     <div class="card">
@@ -2801,7 +2808,9 @@ const PdfBuilder = {
 
     // 5.1 OBSERVACIÓN DE LOS PRODUCTOS (OPCIONAL)
     let obsText = (r.observaciones && r.observaciones.trim()) || DEFAULT_OBSERVACIONES;
-    let obsProdText = (r.observacionesProductos && String(r.observacionesProductos).trim()) || "";
+    let obsProdText = (r.observacionesProductos !== undefined && r.observacionesProductos !== null)
+      ? String(r.observacionesProductos).trim()
+      : DEFAULT_OBSERVACIONES_PRODUCTOS;
     const obsMatch = obsText.match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
     if (obsMatch) {
       if (!obsProdText) obsProdText = obsMatch[1].trim();
