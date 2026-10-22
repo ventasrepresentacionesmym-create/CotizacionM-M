@@ -1058,6 +1058,13 @@ const AppInit = {
       // 3. Cotizaciones
       STATE.cotizaciones = (allCotizaciones || []).map(c => {
         const hasItemImages = Array.isArray(c.items) && c.items.some(it => it.imagen && String(it.imagen).trim().length > 0);
+        let obsGen = c.observaciones || "";
+        let obsProd = "";
+        const m = obsGen.match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
+        if (m) {
+          obsProd = m[1].trim();
+          obsGen = obsGen.slice(m[0].length).trim();
+        }
         return {
           numero: c.numero,
           fecha: c.fecha,
@@ -1069,7 +1076,8 @@ const AppInit = {
           tiempoEntrega: c.tiempo_entrega,
           formaPago: c.forma_pago,
           validez: c.validez,
-          observaciones: c.observaciones,
+          observaciones: obsGen,
+          observacionesProductos: c.observaciones_productos || obsProd || "",
           subtotal: Number(c.subtotal) || 0,
           iva: Number(c.iva) || 0,
           total: Number(c.total) || 0,
@@ -1821,8 +1829,20 @@ Views.renderNueva = function (numeroToLoad) {
     </div>
 
     <div class="card">
+      <label>Observación de los productos <span style="font-weight:normal;color:#64748b;font-size:12px;">(opcional)</span></label>
+      <textarea id="f_obs_productos" rows="2" placeholder="Observaciones o notas adicionales sobre los productos (opcional)..." style="min-height:55px;">${esc(source ? (source.observacionesProductos || (function(){
+        const m = String(source.observaciones || "").match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
+        return m ? m[1].trim() : "";
+      })()) : "")}</textarea>
+    </div>
+
+    <div class="card">
       <label>Observaciones</label>
-      <textarea id="f_obs">${esc(source ? source.observaciones || DEFAULT_OBSERVACIONES : DEFAULT_OBSERVACIONES)}</textarea>
+      <textarea id="f_obs">${esc(source ? (function(){
+        const raw = source.observaciones || DEFAULT_OBSERVACIONES;
+        const m = String(raw).match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
+        return m ? raw.slice(m[0].length).trim() || DEFAULT_OBSERVACIONES : raw;
+      })() : DEFAULT_OBSERVACIONES)}</textarea>
     </div>
 
     <div class="btn-row">
@@ -2172,6 +2192,7 @@ const Cotizador = {
       asesor: (document.getElementById("f_asesor") ? document.getElementById("f_asesor").value : "").trim(),
       fecha: (document.getElementById("f_fecha") ? document.getElementById("f_fecha").value : "").trim(),
       observaciones: document.getElementById("f_obs") ? document.getElementById("f_obs").value : "",
+      observacionesProductos: document.getElementById("f_obs_productos") ? document.getElementById("f_obs_productos").value : "",
       showImages: document.getElementById("toggle_imagenes") ? document.getElementById("toggle_imagenes").checked : false
     };
   },
@@ -2351,7 +2372,15 @@ const Cotizador = {
       tiempo_entrega: r.tiempoEntrega,
       forma_pago: r.formaPago,
       validez: r.validez,
-      observaciones: r.observaciones,
+      observaciones: (function(){
+        let obsGen = r.observaciones != null ? String(r.observaciones) : "";
+        const obsP = r.observacionesProductos != null ? String(r.observacionesProductos).trim() : "";
+        obsGen = obsGen.replace(/^\[OBS_PRODUCTOS\][\s\S]*?\[\/OBS_PRODUCTOS\]\s*/, "");
+        if (obsP) {
+          return `[OBS_PRODUCTOS]\n${obsP}\n[/OBS_PRODUCTOS]\n\n${obsGen}`;
+        }
+        return obsGen;
+      })(),
       subtotal: r.subtotal,
       iva: r.iva,
       total: r.total,
@@ -2770,11 +2799,45 @@ const PdfBuilder = {
     doc.text(fmtCOP(r.total), totX + totW - 12, y + 15, { align: "right" });
     y += 34;
 
+    // 5.1 OBSERVACIÓN DE LOS PRODUCTOS (OPCIONAL)
+    let obsText = (r.observaciones && r.observaciones.trim()) || DEFAULT_OBSERVACIONES;
+    let obsProdText = (r.observacionesProductos && String(r.observacionesProductos).trim()) || "";
+    const obsMatch = obsText.match(/^\[OBS_PRODUCTOS\]([\s\S]*?)\[\/OBS_PRODUCTOS\]\s*/);
+    if (obsMatch) {
+      if (!obsProdText) obsProdText = obsMatch[1].trim();
+      obsText = obsText.slice(obsMatch[0].length).trim() || DEFAULT_OBSERVACIONES;
+    }
+
+    if (obsProdText) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.6);
+      const obsProdLines = doc.splitTextToSize(obsProdText, contentW - 20);
+      const obsProdH = Math.max(34, 22 + obsProdLines.length * 9.5);
+
+      y = ensureSpace(y, obsProdH + 12);
+      const pBoxTop = y;
+
+      doc.setFillColor(...bgPanel);
+      doc.setDrawColor(...border);
+      doc.setLineWidth(0.8);
+      doc.roundedRect(M, pBoxTop, contentW, obsProdH, 4, 4, "FD");
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.setTextColor(...navy);
+      doc.text("OBSERVACIÓN DE PRODUCTOS", M + 10, pBoxTop + 14);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.6);
+      doc.setTextColor(...textDark);
+      doc.text(obsProdLines, M + 10, pBoxTop + 25);
+
+      y = pBoxTop + obsProdH + 10;
+    }
+
     // 6. OBSERVACIONES + FIRMA
     const obsW = contentW * 0.58;
     const firW = contentW - obsW - 12;
-
-    const obsText = (r.observaciones && r.observaciones.trim()) || DEFAULT_OBSERVACIONES;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.6);
     const obsLines = doc.splitTextToSize(obsText, obsW - 20);
